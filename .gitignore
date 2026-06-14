@@ -1,0 +1,51 @@
+# Environnement virtuel Python
+venv/
+
+# Fichiers de base de données
+*.db
+
+# Fichiers JSON de configuration générés automatiquement
+anomaly_settings.json
+brand_mapping.json
+magasin_mapping.json
+store_mapping_corrections.json
+planning_state.json
+
+# Dossiers de données
+input/
+output/
+archive/
+douteux/
+
+# Fichiers CSV lourds (si fréquentation.csv est volumineux, sinon tu peux le garder)
+fréquentation.csv
+supermarches.csv
+
+# Scripts temporaires
+essai.py
+generate_test_data.py# Environnement virtuel Python
+venv/
+
+# Fichiers de base de données
+*.db
+
+# Fichiers JSON de configuration générés automatiquement
+anomaly_settings.json
+brand_mapping.json
+magasin_mapping.json
+store_mapping_corrections.json
+planning_state.json
+
+# Dossiers de données
+input/
+output/
+archive/
+douteux/
+
+# Fichiers CSV lourds (si fréquentation.csv est volumineux, sinon tu peux le garder)
+fréquentation.csv
+supermarches.csv
+
+# Scripts temporaires
+essai.py
+generate_test_data.py
