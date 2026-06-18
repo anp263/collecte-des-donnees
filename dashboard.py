@@ -43,6 +43,7 @@ def force_black_axes(fig, title_size=18, tick_size=15):
     if fig.layout.title:
         fig.layout.title.font.color = "black"
         fig.layout.title.font.size = 22
+        fig.layout.title.font.family = "Gilroy, sans-serif"
     # Légende
     if fig.layout.legend:
         fig.layout.legend.font.color = "black"
@@ -116,6 +117,17 @@ DEFAULT_ANOMALY_SETTINGS = {
 # ============================================================
 # Fonctions utilitaires
 # ============================================================
+
+
+def get_top8_brands_from_acheteurs(df_acheteurs):
+    """
+    Retourne la liste des 8 marques les plus achetées (par nombre d'acheteurs)
+    à partir d'un DataFrame d'acheteurs (avec colonne 'marque_clean').
+    """
+    if df_acheteurs.empty or 'marque_clean' not in df_acheteurs.columns:
+        return []
+    counts = df_acheteurs['marque_clean'].value_counts()
+    return counts.head(8).index.tolist()
 
 def fmt_volume(val, decimals=0):
     if pd.isna(val) or val is None or not np.isfinite(val):
@@ -1655,6 +1667,9 @@ tabs = st.tabs([
 # ------------------------------------------------------------
 # ONGLET 0 : ACCUEIL (corrigé – test figure supprimé, tout en noir)
 # ------------------------------------------------------------
+# ------------------------------------------------------------
+# ONGLET 0 : ACCUEIL
+# ------------------------------------------------------------
 with tabs[0]:
     current_hash = get_sm_hash()
     if 'sm_hash' not in st.session_state:
@@ -1861,6 +1876,115 @@ with tabs[0]:
         st.dataframe(df_avancement, use_container_width=True)
     else:
         st.info("ℹ️ Aucun magasin sélectionné.")
+
+    # ================================================================
+    # Tableau récapitulatif par strate
+    # ================================================================
+    if selected_mags:
+        st.divider()
+        st.subheader("📊 Récapitulatif par strate (taille × niveau socio-économique)")
+
+        # --- 1. Agrégats sur TOUS les supermarchés (fichier complet) ---
+        df_sm_complet = df_sm.copy()
+        price_cols = [c for c in df_sm.columns if ' - ' in c and any(u in c.lower() for u in ['l', 'litre'])]
+        if price_cols:
+            df_sm_complet['vend_huile'] = (df_sm_complet[price_cols] > 0).any(axis=1)
+        else:
+            df_sm_complet['vend_huile'] = True
+
+        df_strates_complet = df_sm_complet.groupby(['Taille', 'Niveau_socio']).agg(
+            nb_total=('Nom', 'count'),
+            nb_vend_huile=('vend_huile', 'sum'),
+            magasins_complet=('Nom', list)
+        ).reset_index()
+
+        # --- 2. Agrégats sur les magasins SÉLECTIONNÉS pour les enquêtes ---
+        df_sm_sel = df_sm[df_sm['Nom'].isin(selected_mags)].copy()
+        if price_cols:
+            df_sm_sel['vend_huile'] = (df_sm_sel[price_cols] > 0).any(axis=1)
+        else:
+            df_sm_sel['vend_huile'] = True
+
+        df_strates_sel = df_sm_sel.groupby(['Taille', 'Niveau_socio']).agg(
+            magasins_sel=('Nom', list)
+        ).reset_index()
+
+        # --- 3. Fusion et calcul des indicateurs ---
+        df_strates = df_strates_complet.merge(df_strates_sel, on=['Taille', 'Niveau_socio'], how='left')
+        df_strates['magasins_sel'] = df_strates['magasins_sel'].apply(lambda x: x if isinstance(x, list) else [])
+
+        # Fonction pour calculer heures et questionnaires sur une liste de magasins (sélectionnés)
+        def get_heures_et_questionnaires(magasins):
+            heures_sem = 0.0
+            heures_we = 0.0
+            nb_q = 0
+            for mag in magasins:
+                if not df_c_f.empty:
+                    sessions = df_c_f[df_c_f['lieu_officiel'] == mag]
+                    if not sessions.empty:
+                        heures_sem += sessions[sessions['date_dt'].dt.weekday < 5]['duree_h'].sum()
+                        heures_we  += sessions[sessions['date_dt'].dt.weekday >= 5]['duree_h'].sum()
+                if not df_supermarche_full.empty:
+                    q_mag = df_supermarche_full[df_supermarche_full['magasin_officiel'] == mag]
+                    if 'statut' in q_mag.columns:
+                        nb_q += len(q_mag[q_mag['statut'] != 'Refus'])
+                    else:
+                        nb_q += len(q_mag)
+            return heures_sem + heures_we, nb_q
+
+        rows_strates = []
+        for _, row in df_strates.iterrows():
+            taille = row['Taille']
+            niveau = row['Niveau_socio']
+            nb_total = row['nb_total']
+            nb_vend_huile = row['nb_vend_huile']
+            pct_vend = (nb_vend_huile / nb_total * 100) if nb_total > 0 else 0
+
+            # Magasins sélectionnés (pour enquête)
+            mags_sel = row['magasins_sel']
+            nb_selected = len(mags_sel)
+
+            # Magasins enquêtés parmi les sélectionnés (ceux avec questionnaire ou comptage)
+            mags_couverts = []
+            for m in mags_sel:
+                has_q = False
+                has_c = False
+                if not df_supermarche_full.empty:
+                    q_mag = df_supermarche_full[df_supermarche_full['magasin_officiel'] == m]
+                    if 'statut' in q_mag.columns:
+                        has_q = len(q_mag[q_mag['statut'] != 'Refus']) > 0
+                    else:
+                        has_q = len(q_mag) > 0
+                if not df_c_f.empty:
+                    has_c = len(df_c_f[df_c_f['lieu_officiel'] == m]) > 0
+                if has_q or has_c:
+                    mags_couverts.append(m)
+            nb_couverts = len(mags_couverts)
+            pct_couvert = (nb_couverts / nb_vend_huile * 100) if nb_vend_huile > 0 else 0
+
+            # Heures et questionnaires pour les magasins sélectionnés
+            total_heures, nb_q = get_heures_et_questionnaires(mags_sel)
+
+            # Formatter
+            vend_huile_str = f"{nb_vend_huile} ({pct_vend:.1f}%)"
+            enquete_str = f"{nb_couverts} ({pct_couvert:.1f}%)" if nb_couverts > 0 else f"0 (0.0%)"
+
+            rows_strates.append({
+                'Strate': f"{taille} / {niveau}",
+                'Nombre total de supermarché': nb_total,
+                'Dont vendant huile non raffinée': vend_huile_str,
+                'Dont enquêtés': enquete_str,
+                'Heures de comptage valides': f"{total_heures:.1f}",
+                'Questionnaires valides': nb_q
+            })
+
+        if rows_strates:
+            df_strates_resume = pd.DataFrame(rows_strates)
+            st.dataframe(df_strates_resume, use_container_width=True)
+        else:
+            st.info("Aucune donnée de strate disponible.")
+    else:
+        st.info("Sélectionnez des magasins pour voir le récapitulatif par strate.")
 
     st.divider()
     st.header("🛒 Sélection des magasins (avec huile)")
@@ -2454,12 +2578,12 @@ with tabs[1]:
 # ONGLET 2 : SUPERMARCHÉ
 # ------------------------------------------------------------
 with tabs[2]:
-    st.header("Questionnaires Supermarché")
+    st.header("🛒 Questionnaires Supermarché")
 
     if df_supermarche_full.empty:
         st.info("Aucun questionnaire supermarché trouvé pour les magasins sélectionnés.")
     else:
-        # Sélecteur de magasin (basé sur la version complète)
+        # Sélecteur de magasin
         magasins_disponibles = sorted(df_supermarche_full['magasin_officiel'].unique())
         mag_sel = st.selectbox("Magasin", ["Tous"] + magasins_disponibles, key="mag_sm")
 
@@ -2476,7 +2600,7 @@ with tabs[2]:
         if df_show_full.empty:
             st.info("Aucune donnée pour ce magasin.")
         else:
-            # Extraction démographique (appliquée à df_show_full)
+            # Extraction démographique
             def get_sexe(x):
                 if not isinstance(x, str): return None
                 if 'Sexe:' in x:
@@ -2493,9 +2617,6 @@ with tabs[2]:
                 m2 = re.search(r'(\d{2})', x)
                 return m2.group(1) if m2 else None
 
-            df_show_full['Sexe'] = df_show_full['SexeAge'].apply(get_sexe)
-            df_show_full['Âge'] = df_show_full['SexeAge'].apply(get_age)
-
             def tranche_age(age_str):
                 if not age_str: return 'Inconnu'
                 try:
@@ -2506,9 +2627,11 @@ with tabs[2]:
                     else: return '50 ans et plus'
                 except: return 'Inconnu'
 
+            df_show_full['Sexe'] = df_show_full['SexeAge'].apply(get_sexe)
+            df_show_full['Âge'] = df_show_full['SexeAge'].apply(get_age)
             df_show_full['Tranche_age'] = df_show_full['Âge'].apply(tranche_age)
 
-            # Filtre par sexe/âge (pour les acheteurs)
+            # Filtres sexe/âge
             def filter_df(data, key_suffix):
                 col1, col2 = st.columns(2)
                 with col1:
@@ -2521,10 +2644,16 @@ with tabs[2]:
                 if age_sel != "Tous": filtered = filtered[filtered['Tranche_age'] == age_sel]
                 return filtered, sexe_sel, age_sel
 
-            # Acheteurs globaux (sur la version complète)
-            acheteurs_global_full = df_show_full[df_show_full['Q1'] == 'Oui'].copy()
+            # Acheteurs globaux (hors refus)
+            if 'statut' in df_show_full.columns:
+                df_show_valides = df_show_full[df_show_full['statut'] != 'Refus']
+            else:
+                df_show_valides = df_show_full
 
-            # Consentement (inchangé)
+            acheteurs_global_full = df_show_valides[df_show_valides['Q1'] == 'Oui'].copy()
+            taux_achat = len(acheteurs_global_full) / len(df_show_valides) * 100 if len(df_show_valides) > 0 else 0
+
+            # Consentement
             def is_willing_to_pay_more(crit_list):
                 if not crit_list: return False
                 for crit in crit_list:
@@ -2539,23 +2668,14 @@ with tabs[2]:
 
             # ----- 1. SYNTHÈSE GÉNÉRALE -----
             col1, col2, col3, col4 = st.columns(4)
-
-            # Exclure les refus pour le calcul du taux d'achat (et pour toutes les métriques qui suivent)
-            if 'statut' in df_show_full.columns:
-                df_show_valides = df_show_full[df_show_full['statut'] != 'Refus']
-            else:
-                df_show_valides = df_show_full
-
-            acheteurs_global_full = df_show_valides[df_show_valides['Q1'] == 'Oui'].copy()
-            taux_achat = len(acheteurs_global_full) / len(df_show_valides) * 100 if len(df_show_valides) > 0 else 0
-            col1.metric("Taux d'achat", f"{taux_achat:.1f}%")
             vol_moy = acheteurs_global_full['vol_litres'].mean() if not acheteurs_global_full.empty else 0
-            col2.metric("Vol. moyen (L)", f"{fmt_volume(vol_moy,2)} L")
             prix_moy = acheteurs_global_full['prix_litre'].mean() if not acheteurs_global_full.empty else 0
+            col1.metric("Taux d'achat", f"{taux_achat:.1f}%")
+            col2.metric("Vol. moyen (L)", f"{fmt_volume(vol_moy,2)} L")
             col3.metric("Prix/L", fmt_prix(prix_moy, st.session_state.get("devise_globale", "FC")))
             col4.metric("Acheteurs", len(acheteurs_global_full))
 
-            # ----- 2. TABLEAU PAR SEGMENT -----
+            # ----- 2. TABLEAU PAR SEGMENT (inchangé) -----
             st.subheader("📊 Synthèse par segment de magasin (taille × niveau socio-économique)")
             if not df_sm.empty and not df_supermarche_full.empty:
                 df_sm_seg = df_sm[['Nom', 'Taille', 'Niveau_socio']].copy()
@@ -2574,9 +2694,7 @@ with tabs[2]:
                         mask = (df_q_seg['Taille'] == taille) & (df_q_seg['Niveau_socio'] == niveau)
                         sub = df_q_seg[mask]
                         if sub.empty:
-                            # Sauter les combinaisons sans données
                             continue
-                        # Exclure les refus pour ce segment
                         if 'statut' in sub.columns:
                             sub_valides = sub[sub['statut'] != 'Refus']
                         else:
@@ -2584,76 +2702,120 @@ with tabs[2]:
                         total_q = len(sub_valides)
                         acheteurs = sub_valides[sub_valides['Q1'] == 'Oui']
                         nb_acheteurs = len(acheteurs)
-                        taux_achat = (nb_acheteurs / total_q * 100) if total_q > 0 else 0
-                        # Les volumes moyens et prix moyens peuvent rester basés sur acheteurs (pas de refus)
-                        vol_moy = acheteurs['vol_litres'].mean() if nb_acheteurs > 0 else 0
-                        prix_moy = acheteurs['prix_litre'].mean() if nb_acheteurs > 0 else 0
+                        taux_achat_seg = (nb_acheteurs / total_q * 100) if total_q > 0 else 0
+                        vol_moy_seg = acheteurs['vol_litres'].mean() if nb_acheteurs > 0 else 0
+                        prix_moy_seg = acheteurs['prix_litre'].mean() if nb_acheteurs > 0 else 0
                         rows_seg.append({
                             'Taille': taille,
                             'Niveau socio-économique': niveau,
                             'Nb questionnaires': total_q,
-                            'Taux d\'achat (%)': round(taux_achat, 1),
-                            'Volume moyen (L)': fmt_volume(vol_moy, 2) + " L",
-                            'Prix moyen (FC/L)': fmt_prix(prix_moy, "FC") + "/L"
+                            'Taux d\'achat (%)': round(taux_achat_seg, 1),
+                            'Volume moyen (L)': fmt_volume(vol_moy_seg, 2) + " L",
+                            'Prix moyen (FC/L)': fmt_prix(prix_moy_seg, "FC") + "/L"
                         })
                 if rows_seg:
                     df_seg_sm = pd.DataFrame(rows_seg)
                     st.dataframe(df_seg_sm, use_container_width=True)
 
                     fig_seg_sm = px.bar(df_seg_sm[df_seg_sm['Nb questionnaires'] > 0],
-                                        x='Taille', y="Taux d'achat (%)", color='Niveau socio-économique',
-                                        barmode='group', title="Taux d'achat par segment")
+                                        x='Taille',
+                                        y="Taux d'achat (%)",
+                                        color='Niveau socio-économique',
+                                        barmode='group',
+                                        labels={'Taille': 'Taille du magasin',
+                                                'Taux d\'achat (%)': 'Taux d\'achat (%)',
+                                                'Niveau socio-économique': 'Niveau'},
+                                        title="Taux d'achat par segment (taille × niveau)")
                     fig_seg_sm.update_layout(template="gilroy_export")
                     fig_seg_sm = force_black_axes(fig_seg_sm)
                     st.plotly_chart(fig_seg_sm, use_container_width=True)
-            else:
-                st.info("Données insuffisantes pour la segmentation.")
+                    st.caption(f"Basé sur {df_seg_sm['Nb questionnaires'].sum()} questionnaires valides (hors refus).")
 
-            # ----- 3. MARQUES ET RAISONS D'ACHAT (basé sur df_show filtré) -----
+            # ----- 3. MARQUES ET RAISONS D'ACHAT (avec top 8 + Autres) -----
             st.subheader("🏷️ Marques et raisons d'achat")
-            # Pour les marques, on part des acheteurs complets puis on filtre sur marque connue
             acheteurs_global = df_show[df_show['Q1'] == 'Oui'].copy() if not df_show.empty else pd.DataFrame()
             acheteurs_filt, _, _ = filter_df(acheteurs_global, "marques")
+
+            # Calcul du top 8 pour les données filtrées
+            def get_top8_brands_from_acheteurs(df_acheteurs):
+                if df_acheteurs.empty or 'marque_clean' not in df_acheteurs.columns:
+                    return []
+                counts = df_acheteurs['marque_clean'].value_counts()
+                return counts.head(8).index.tolist()
+
+            top8_brands = get_top8_brands_from_acheteurs(acheteurs_filt)
+
             col_marq, col_rais = st.columns(2)
             with col_marq:
-                if not acheteurs_filt.empty and 'marque_clean' in acheteurs_filt.columns:
-                    marques = acheteurs_filt['marque_clean'].value_counts().reset_index()
-                    marques.columns = ['Marque', 'Nombre']
-                    fig_marq = px.pie(marques, values='Nombre', names='Marque', title="Marques achetées")
+                if not acheteurs_filt.empty and top8_brands:
+                    marque_counts = acheteurs_filt['marque_clean'].value_counts()
+                    # Pour le camembert, on calcule les pourcentages
+                    marque_pct = marque_counts / marque_counts.sum() * 100
+                    top8_pct = marque_pct[marque_pct.index.isin(top8_brands)]
+                    autres_pct = marque_pct[~marque_pct.index.isin(top8_brands)].sum()
+                    # DataFrame pour le pie
+                    pie_data = pd.DataFrame({
+                        'Marque': top8_pct.index.tolist() + (['Autres'] if autres_pct > 0 else []),
+                        'Pourcentage': top8_pct.tolist() + ([autres_pct] if autres_pct > 0 else [])
+                    })
+                    # Mettre "Autres" en dernier
+                    pie_data['ordre'] = pie_data['Marque'].apply(lambda x: 0 if x != 'Autres' else 1)
+                    pie_data = pie_data.sort_values('ordre').drop(columns=['ordre'])
+
+                    fig_marq = px.pie(pie_data, values='Pourcentage', names='Marque',
+                                    title="Marques achetées (top 8 + Autres)")
+                    fig_marq.update_traces(textinfo='percent+label', sort=False)
                     fig_marq.update_layout(template="gilroy_export")
                     fig_marq = force_black_axes(fig_marq)
                     st.plotly_chart(fig_marq, use_container_width=True)
+                    st.caption(f"Basé sur {len(acheteurs_filt)} acheteurs. Les pourcentages sont calculés sur l'ensemble des acheteurs (marques reconnues).")
                 else:
                     st.info("Aucun acheteur avec marque reconnue.")
+
             with col_rais:
                 if not acheteurs_filt.empty:
                     raisons_series = acheteurs_filt['Q3'].dropna().str.split(',').explode().str.strip()
-                    raisons_counts = raisons_series.value_counts().reset_index()
-                    raisons_counts.columns = ['Raison', 'Nombre']
-                    if not raisons_counts.empty:
-                        fig_rais = px.bar(raisons_counts, x='Raison', y='Nombre', title="Raisons de choix de la marque")
+                    raisons_counts = raisons_series.value_counts()
+                    raisons_pct = raisons_counts / len(acheteurs_filt) * 100
+                    raisons_df = raisons_pct.reset_index()
+                    raisons_df.columns = ['Raison', 'Pourcentage']
+                    if not raisons_df.empty:
+                        fig_rais = px.bar(raisons_df,
+                                          x='Raison', y='Pourcentage',
+                                          labels={'Raison': 'Raison évoquée', 'Pourcentage': 'Pourcentage des acheteurs (%)'},
+                                          title="Raisons de choix de la marque")
+                        fig_rais.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
                         fig_rais.update_layout(template="gilroy_export")
                         fig_rais = force_black_axes(fig_rais)
                         st.plotly_chart(fig_rais, use_container_width=True)
+                        st.caption(f"Basé sur {len(acheteurs_filt)} acheteurs. Un acheteur peut citer plusieurs raisons.")
                     else:
                         st.info("Aucune raison.")
                 else:
                     st.info("Aucun acheteur.")
 
-            # Croisement marque × raison
-            if not acheteurs_filt.empty and 'Q3' in acheteurs_filt.columns:
-                exploded = acheteurs_filt[['marque_clean', 'Q3']].dropna()
-                exploded = exploded.assign(Raison=exploded['Q3'].str.split(',')).explode('Raison')
-                exploded['Raison'] = exploded['Raison'].str.strip()
-                exploded = exploded[exploded['Raison'] != '']
-                exploded = exploded.reset_index(drop=True)
-                cross = pd.crosstab(exploded['marque_clean'], exploded['Raison'])
-                if not cross.empty:
-                    st.subheader("🔗 Raisons par marque")
-                    fig_cross = px.imshow(cross, text_auto=True, aspect="auto", title="Effectifs marque × raison")
-                    fig_cross.update_layout(template="gilroy_export")
-                    fig_cross = force_black_axes(fig_cross)
-                    st.plotly_chart(fig_cross, use_container_width=True)
+            # Croisement marque × raison (uniquement pour le top 8)
+            if not acheteurs_filt.empty and 'Q3' in acheteurs_filt.columns and top8_brands:
+                temp = acheteurs_filt[['marque_clean', 'Q3']].dropna(subset=['marque_clean'])
+                temp = temp[temp['marque_clean'].isin(top8_brands)]
+                temp = temp[temp['Q3'].notna() & (temp['Q3'].astype(str).str.strip() != '')]
+                if not temp.empty:
+                    exploded = temp.assign(Raison=temp['Q3'].astype(str).str.split(',')).explode('Raison')
+                    exploded['Raison'] = exploded['Raison'].str.strip()
+                    exploded = exploded[exploded['Raison'] != '']
+                    exploded_top = exploded.reset_index(drop=True)  # Correction de l'erreur
+                    if not exploded_top.empty:
+                        cross = pd.crosstab(exploded_top['marque_clean'], exploded_top['Raison'])
+                        st.subheader("🔗 Raisons par marque")
+                        fig_cross = px.imshow(cross,
+                                              text_auto=True,
+                                              aspect="auto",
+                                              labels=dict(x="Raison", y="Marque", color="Effectif"),
+                                              title="Effectifs marque × raison (top 8 marques)")
+                        fig_cross.update_layout(template="gilroy_export")
+                        fig_cross = force_black_axes(fig_cross)
+                        st.plotly_chart(fig_cross, use_container_width=True)
+                        st.caption(f"Basé sur {len(exploded_top)} citations parmi les acheteurs des 8 marques principales.")
 
             # ----- 4. VOLUMES ACHETÉS -----
             st.subheader("📦 Volumes achetés")
@@ -2662,23 +2824,32 @@ with tabs[2]:
             with col_vol1:
                 if not acheteurs_vol.empty:
                     fig_vol_hist = px.histogram(acheteurs_vol, x='vol_litres', nbins=20,
-                                                title="Distribution des volumes (litres)")
+                                                histnorm='percent',
+                                                labels={'vol_litres': 'Volume (L)', 'percent': 'Pourcentage des acheteurs'},
+                                                title="Distribution des volumes achetés (litres)")
+                    fig_vol_hist.update_traces(texttemplate=None)  # supprime les pourcentages sur les barres
                     fig_vol_hist.update_xaxes(tickformat=",.0f")
                     fig_vol_hist.update_layout(template="gilroy_export")
                     fig_vol_hist = force_black_axes(fig_vol_hist)
                     st.plotly_chart(fig_vol_hist, use_container_width=True)
+                    st.caption(f"Basé sur {len(acheteurs_vol)} acheteurs. Pourcentage calculé sur l'ensemble des acheteurs.")
                 else:
                     st.info("Aucun acheteur.")
             with col_vol2:
-                if not acheteurs_vol.empty and 'marque_clean' in acheteurs_vol.columns:
-                    vol_par_marque = acheteurs_vol.groupby('marque_clean')['vol_litres'].mean().reset_index()
+                if not acheteurs_vol.empty and 'marque_clean' in acheteurs_vol.columns and top8_brands:
+                    df_vol_top8 = acheteurs_vol[acheteurs_vol['marque_clean'].isin(top8_brands)]
+                    vol_par_marque = df_vol_top8.groupby('marque_clean')['vol_litres'].mean().reset_index()
                     vol_par_marque.columns = ['Marque', 'Volume moyen (L)']
-                    fig_vol_marq = px.bar(vol_par_marque, x='Marque', y='Volume moyen (L)',
-                                          title="Volume moyen par marque")
+                    vol_par_marque = vol_par_marque.sort_values('Volume moyen (L)', ascending=False)
+                    fig_vol_marq = px.bar(vol_par_marque,
+                                          x='Marque', y='Volume moyen (L)',
+                                          labels={'Marque': 'Marque', 'Volume moyen (L)': 'Volume moyen (L)'},
+                                          title="Volume moyen par marque (top 8)")
                     fig_vol_marq.update_yaxes(tickformat=",.0f")
                     fig_vol_marq.update_layout(template="gilroy_export")
                     fig_vol_marq = force_black_axes(fig_vol_marq)
                     st.plotly_chart(fig_vol_marq, use_container_width=True)
+                    st.caption(f"Basé sur {len(df_vol_top8)} acheteurs ayant acheté une marque du top 8.")
                 else:
                     st.info("Aucun acheteur.")
 
@@ -2691,27 +2862,27 @@ with tabs[2]:
                         return val
                     return pd.NA
                 acheteurs_freq['Q6_clean'] = acheteurs_freq['Q6'].apply(clean_q6)
-                freq_counts = acheteurs_freq['Q6_clean'].dropna().value_counts().reset_index()
-                freq_counts.columns = ['Fréquence', 'Nombre']
+                freq_counts = acheteurs_freq['Q6_clean'].dropna().value_counts()
                 if not freq_counts.empty:
-                    fig_freq = px.bar(freq_counts, x='Fréquence', y='Nombre', title="Fréquence d'achat (acheteurs)")
+                    freq_pct = freq_counts / freq_counts.sum() * 100
+                    freq_df = freq_pct.reset_index()
+                    freq_df.columns = ['Fréquence', 'Pourcentage']
+                    fig_freq = px.bar(freq_df,
+                                      x='Fréquence', y='Pourcentage',
+                                      labels={'Fréquence': 'Fréquence', 'Pourcentage': 'Pourcentage des acheteurs (%)'},
+                                      title="Fréquence d'achat (acheteurs)")
+                    fig_freq.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
                     fig_freq.update_layout(template="gilroy_export")
                     fig_freq = force_black_axes(fig_freq)
                     st.plotly_chart(fig_freq, use_container_width=True)
+                    st.caption(f"Basé sur {freq_counts.sum()} acheteurs. Pourcentage calculé sur l'ensemble des acheteurs.")
                 else:
                     st.info("Aucune réponse.")
             else:
                 st.info("Aucun acheteur.")
 
-            # ----- 6. CONSENTEMENT À PAYER PLUS -----
+            # ----- 6. CONSENTEMENT À PAYER PLUS (taux et critères) -----
             st.subheader("💵 Consentement à payer plus cher")
-
-            # S'assurer que les colonnes de consentement sont présentes (même après filtrage)
-            if 'pret_plus' not in acheteurs_global_full.columns:
-                acheteurs_global_full['criteres_consentement'] = acheteurs_global_full['criteres_consentement'].apply(
-                    lambda x: x if isinstance(x, list) else [])
-                acheteurs_global_full['pret_plus'] = acheteurs_global_full['criteres_consentement'].apply(is_willing_to_pay_more)
-
             acheteurs_cons, _, _ = filter_df(acheteurs_global_full, "consent")
             if not acheteurs_cons.empty:
                 nb_pret = acheteurs_cons['pret_plus'].sum()
@@ -2727,14 +2898,24 @@ with tabs[2]:
                 if not pret_df.empty:
                     all_criteria = pret_df['criteres_consentement'].explode()
                     all_criteria = all_criteria[~all_criteria.str.lower().str.contains('non|pas prêt|ne suis pas', na=False)]
-                    crit_counts = all_criteria.value_counts().reset_index()
-                    crit_counts.columns = ['Critère', 'Nombre']
-                    if not crit_counts.empty:
-                        st.subheader("📋 Critères invoqués pour accepter de payer plus")
-                        fig_crit = px.bar(crit_counts, x='Critère', y='Nombre')
+                    crit_counts = all_criteria.value_counts()
+                    crit_pct = crit_counts / len(pret_df) * 100
+                    crit_df = crit_pct.reset_index()
+                    crit_df.columns = ['Critère', 'Pourcentage']
+                    if not crit_df.empty:
+                        st.subheader("📋 Critères invoqués pour accepter de payer plus (top 8)")
+                        top_crit = crit_df.head(8)
+                        autres_crit = crit_df.iloc[8:]['Pourcentage'].sum()
+                        if autres_crit > 0:
+                            top_crit = pd.concat([top_crit, pd.DataFrame({'Critère': ['Autres'], 'Pourcentage': [autres_crit]})], ignore_index=True)
+                        fig_crit = px.bar(top_crit, x='Critère', y='Pourcentage',
+                                          labels={'Critère': 'Critère', 'Pourcentage': 'Pourcentage des acheteurs prêts à payer plus (%)'},
+                                          title="Critères de consentement à payer plus")
+                        fig_crit.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
                         fig_crit.update_layout(template="gilroy_export")
                         fig_crit = force_black_axes(fig_crit)
                         st.plotly_chart(fig_crit, use_container_width=True)
+                        st.caption(f"Basé sur {len(pret_df)} acheteurs prêts à payer plus. Un acheteur peut citer plusieurs critères.")
                     else:
                         st.info("Aucun critère positif.")
                 else:
@@ -2755,23 +2936,42 @@ with tabs[2]:
                             lambda x: x if isinstance(x, list) else [])
                         exploded = pret_ecart.explode('criteres_consentement')
                         exploded = exploded[~exploded['criteres_consentement'].str.lower().str.contains('non|pas prêt|ne suis pas', na=False)]
-                        ecart_par_crit = exploded.groupby('criteres_consentement')['ecart_rel'].agg(['mean', 'count']).reset_index()
-                        ecart_par_crit.columns = ['Critère', 'Écart moyen (%)', "Nombre d'acheteurs"]
-                        ecart_par_crit['Écart moyen (%)'] = ecart_par_crit['Écart moyen (%)'].round(1)
-                        fig_ecart_crit = px.bar(ecart_par_crit, x='Critère', y='Écart moyen (%)',
-                                                text="Nombre d'acheteurs",
-                                                title="Pourcentage moyen que les acheteurs sont prêts à payer en plus, par critère")
-                        fig_ecart_crit.update_traces(texttemplate='%{text}', textposition='outside')
-                        fig_ecart_crit.update_layout(template="gilroy_export")
-                        fig_ecart_crit = force_black_axes(fig_ecart_crit)
-                        st.plotly_chart(fig_ecart_crit, use_container_width=True)
+                        if not exploded.empty:
+                            ecart_par_crit = exploded.groupby('criteres_consentement')['ecart_rel'].agg(['mean', 'count']).reset_index()
+                            ecart_par_crit.columns = ['Critère', 'Écart moyen (%)', "Nombre d'acheteurs"]
+                            ecart_par_crit['Écart moyen (%)'] = ecart_par_crit['Écart moyen (%)'].round(1)
+                            # Top 8 critères
+                            top_ecart = ecart_par_crit.sort_values("Nombre d'acheteurs", ascending=False).head(8)
+                            autres_ecart = ecart_par_crit.iloc[8:].copy()
+                            if not autres_ecart.empty:
+                                autres_row = pd.DataFrame({
+                                    'Critère': ['Autres'],
+                                    'Écart moyen (%)': [autres_ecart['Écart moyen (%)'].mean()],
+                                    "Nombre d'acheteurs": [autres_ecart["Nombre d'acheteurs"].sum()]
+                                })
+                                top_ecart = pd.concat([top_ecart, autres_row], ignore_index=True)
+                            fig_ecart_crit = px.bar(top_ecart, x='Critère', y='Écart moyen (%)',
+                                                    text="Nombre d'acheteurs",
+                                                    labels={'Critère': 'Critère',
+                                                            'Écart moyen (%)': 'Écart moyen (%)'},
+                                                    title="Pourcentage moyen que les acheteurs sont prêts à payer en plus, par critère (top 8)")
+                            fig_ecart_crit.update_traces(texttemplate='%{text}', textposition='outside')
+                            fig_ecart_crit.update_layout(template="gilroy_export")
+                            fig_ecart_crit = force_black_axes(fig_ecart_crit)
+                            st.plotly_chart(fig_ecart_crit, use_container_width=True)
+                            st.caption(f"Basé sur {len(pret_ecart)} acheteurs prêts à payer plus avec données de prix valides.")
 
-                        with st.expander("📊 Boxplot des écarts par critère"):
-                            fig_box = px.box(exploded, x='criteres_consentement', y='ecart_rel',
-                                             title="Distribution de l'écart de prix par critère")
-                            fig_box.update_layout(template="gilroy_export")
-                            fig_box = force_black_axes(fig_box)
-                            st.plotly_chart(fig_box, use_container_width=True)
+                            with st.expander("📊 Boxplot des écarts par critère (top 8)"):
+                                top_crit_list = top_ecart[top_ecart['Critère'] != 'Autres']['Critère'].tolist()
+                                df_box = exploded[exploded['criteres_consentement'].isin(top_crit_list)]
+                                if not df_box.empty:
+                                    fig_box = px.box(df_box, x='criteres_consentement', y='ecart_rel',
+                                                     labels={'criteres_consentement': 'Critère', 'ecart_rel': 'Écart de prix (%)'},
+                                                     title="Distribution de l'écart de prix par critère")
+                                    fig_box.update_layout(template="gilroy_export")
+                                    fig_box = force_black_axes(fig_box)
+                                    st.plotly_chart(fig_box, use_container_width=True)
+                                    st.caption(f"Basé sur {len(df_box)} observations. Les points représentent les acheteurs.")
                     else:
                         st.info("Aucun acheteur prêt à payer plus avec données de prix valides.")
                 else:
@@ -2786,39 +2986,57 @@ with tabs[2]:
                 col1, col2 = st.columns(2)
                 with col1:
                     st.markdown("**Acheteurs par sexe**")
-                    sexe_counts = acheteurs_seg['Sexe'].value_counts().reset_index()
-                    sexe_counts.columns = ['Sexe', 'Nombre']
-                    fig_sexe = px.bar(sexe_counts, x='Sexe', y='Nombre', color='Sexe')
+                    sexe_counts = acheteurs_seg['Sexe'].value_counts()
+                    sexe_pct = sexe_counts / sexe_counts.sum() * 100
+                    sexe_df = sexe_pct.reset_index()
+                    sexe_df.columns = ['Sexe', 'Pourcentage']
+                    fig_sexe = px.bar(sexe_df, x='Sexe', y='Pourcentage',
+                                      color='Sexe',
+                                      labels={'Sexe': 'Sexe', 'Pourcentage': 'Pourcentage des acheteurs (%)'},
+                                      title="Acheteurs par sexe")
+                    fig_sexe.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
                     fig_sexe.update_layout(template="gilroy_export")
                     fig_sexe = force_black_axes(fig_sexe)
                     st.plotly_chart(fig_sexe, use_container_width=True)
+                    st.caption(f"Basé sur {len(acheteurs_seg)} acheteurs. Pourcentage calculé sur l'ensemble des acheteurs.")
                 with col2:
                     st.markdown("**Acheteurs par âge**")
-                    age_counts = acheteurs_seg['Tranche_age'].value_counts().reset_index()
-                    age_counts.columns = ["Tranche d'âge", 'Nombre']
-                    fig_age = px.bar(age_counts, x="Tranche d'âge", y='Nombre', color="Tranche d'âge")
+                    age_counts = acheteurs_seg['Tranche_age'].value_counts()
+                    age_pct = age_counts / age_counts.sum() * 100
+                    age_df = age_pct.reset_index()
+                    age_df.columns = ["Tranche d'âge", 'Pourcentage']
+                    fig_age = px.bar(age_df, x="Tranche d'âge", y='Pourcentage',
+                                     color="Tranche d'âge",
+                                     labels={"Tranche d'âge": "Âge", 'Pourcentage': 'Pourcentage des acheteurs (%)'},
+                                     title="Acheteurs par tranche d'âge")
+                    fig_age.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
                     fig_age.update_layout(template="gilroy_export")
                     fig_age = force_black_axes(fig_age)
                     st.plotly_chart(fig_age, use_container_width=True)
+                    st.caption(f"Basé sur {len(acheteurs_seg)} acheteurs. Pourcentage calculé sur l'ensemble des acheteurs.")
 
                 st.markdown("**Heatmap des acheteurs (Âge × Sexe)**")
                 heat_data = pd.crosstab(acheteurs_seg['Tranche_age'], acheteurs_seg['Sexe'])
                 if not heat_data.empty:
                     fig_heat = px.imshow(heat_data, text_auto=True, aspect="auto",
-                                        title="Nombre d'acheteurs par âge et sexe")
+                                         labels=dict(x="Sexe", y="Tranche d'âge", color="Effectif"),
+                                         title="Nombre d'acheteurs par âge et sexe")
                     fig_heat.update_layout(template="gilroy_export")
                     fig_heat = force_black_axes(fig_heat)
                     st.plotly_chart(fig_heat, use_container_width=True)
+                    st.caption(f"Basé sur {len(acheteurs_seg)} acheteurs. Les effectifs sont indiqués dans chaque case.")
 
                 st.markdown("**Volume acheté par âge et sexe**")
                 vol_data = acheteurs_seg[['Sexe', 'Tranche_age', 'vol_litres']].dropna()
                 if not vol_data.empty:
                     fig_box_age = px.box(vol_data, x='Tranche_age', y='vol_litres', color='Sexe',
-                                        title="Distribution du volume acheté (L)")
+                                         labels={'Tranche_age': 'Âge', 'vol_litres': 'Volume (L)', 'Sexe': 'Sexe'},
+                                         title="Distribution du volume acheté (L) par âge et sexe")
                     fig_box_age.update_yaxes(tickformat=",.0f")
                     fig_box_age.update_layout(template="gilroy_export")
                     fig_box_age = force_black_axes(fig_box_age)
                     st.plotly_chart(fig_box_age, use_container_width=True)
+                    st.caption(f"Basé sur {len(vol_data)} acheteurs. La boîte montre la médiane et les quartiles.")
                 else:
                     st.info("Données de volume insuffisantes.")
             else:
@@ -2826,13 +3044,11 @@ with tabs[2]:
 
             # ----- 9. PERCEPTION DE LA QUALITÉ & NOTORIÉTÉ -----
             st.subheader("🔍 Perception de la qualité & Notoriété de RougeCongo des clients des supermarchés")
-            # Acheteurs supermarché (Q1=Oui) hors refus
             if 'statut' in df_supermarche_full.columns:
                 acheteurs_sm = df_supermarche_full[(df_supermarche_full['Q1'] == 'Oui') & (df_supermarche_full['statut'] != 'Refus')].copy()
             else:
                 acheteurs_sm = df_supermarche_full[df_supermarche_full['Q1'] == 'Oui'].copy()
 
-            # Non-acheteurs réinterrogés (supermarche_menage) hors refus
             sm_menage = df_q_f[df_q_f['type'] == 'supermarche_menage'].copy()
             if 'statut' in sm_menage.columns:
                 sm_menage = sm_menage[sm_menage['statut'] != 'Refus']
@@ -2887,12 +3103,27 @@ with tabs[2]:
                     qual_series = df_combined_filt['Q_Qualite'].dropna().astype(str).str.split(',').explode().str.strip()
                     qual_series = qual_series[qual_series != '']
                     qual_series = qual_series.apply(lambda x: x.split(':', 1)[1].strip() if x.lower().startswith('autre:') else x)
-                    qual_counts = qual_series.value_counts().reset_index()
-                    qual_counts.columns = ['Critère', 'Nombre']
-                    fig_qual = px.bar(qual_counts, x='Critère', y='Nombre', title="Comment reconnaît-on la qualité de l'huile ?")
+                    qual_counts = qual_series.value_counts()
+                    # Nombre total de répondants à cette question
+                    nb_qual_rep = df_combined_filt['Q_Qualite'].notna().sum()
+                    qual_pct = qual_counts / nb_qual_rep * 100
+                    qual_df = qual_pct.reset_index()
+                    qual_df.columns = ['Critère', 'Pourcentage']
+                    # Regrouper les critères < 1%
+                    qual_df['groupe'] = qual_df['Pourcentage'].apply(lambda x: 'Autres' if x < 1 else x)
+                    qual_df_agg = qual_df.groupby('groupe')['Pourcentage'].sum().reset_index()
+                    qual_df_agg.columns = ['Critère', 'Pourcentage']
+                    # Mettre "Autres" en dernier
+                    qual_df_agg['ordre'] = qual_df_agg['Critère'].apply(lambda x: 0 if x != 'Autres' else 1)
+                    qual_df_agg = qual_df_agg.sort_values('ordre').drop(columns=['ordre'])
+                    fig_qual = px.bar(qual_df_agg, x='Critère', y='Pourcentage',
+                                    labels={'Critère': 'Critère de qualité', 'Pourcentage': 'Pourcentage des répondants (%)'},
+                                    title="Critères de reconnaissance de la qualité de l'huile")
+                    fig_qual.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
                     fig_qual.update_layout(template="gilroy_export")
                     fig_qual = force_black_axes(fig_qual)
                     st.plotly_chart(fig_qual, use_container_width=True)
+                    st.caption(f"Basé sur {nb_qual_rep} répondants ayant répondu à cette question. Un répondant peut citer plusieurs critères. Les critères à moins de 1% sont regroupés dans 'Autres'.")
                 else:
                     st.info("Aucune réponse sur la reconnaissance de la qualité.")
 
@@ -2900,13 +3131,19 @@ with tabs[2]:
                 col_conn, col_qual_rc = st.columns(2)
                 with col_conn:
                     if not df_combined_filt.empty and df_combined_filt['RC_Conn'].notna().any():
-                        conn_counts = df_combined_filt['RC_Conn'].dropna().value_counts().reset_index()
-                        conn_counts.columns = ['Réponse', 'Nombre']
-                        conn_counts = conn_counts[conn_counts['Réponse'] != '']
-                        fig_conn = px.bar(conn_counts, x='Réponse', y='Nombre', title="Avez-vous déjà entendu parler de RougeCongo ?")
+                        conn_counts = df_combined_filt['RC_Conn'].dropna().loc[lambda x: x != ''].value_counts()
+                        nb_conn_rep = df_combined_filt['RC_Conn'].notna().sum()
+                        conn_pct = conn_counts / nb_conn_rep * 100
+                        conn_df = conn_pct.reset_index()
+                        conn_df.columns = ['Réponse', 'Pourcentage']
+                        fig_conn = px.bar(conn_df, x='Réponse', y='Pourcentage',
+                                        labels={'Réponse': 'Réponse', 'Pourcentage': 'Pourcentage des répondants (%)'},
+                                        title="Notoriété de RougeCongo")
+                        fig_conn.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
                         fig_conn.update_layout(template="gilroy_export")
                         fig_conn = force_black_axes(fig_conn)
                         st.plotly_chart(fig_conn, use_container_width=True)
+                        st.caption(f"Basé sur {nb_conn_rep} répondants ayant répondu à cette question.")
                     else:
                         st.info("Aucune donnée sur la connaissance.")
                 with col_qual_rc:
@@ -2914,12 +3151,25 @@ with tabs[2]:
                         qual_rc_series = df_combined_filt['RC_Qual'].dropna().astype(str).str.split(',').explode().str.strip()
                         qual_rc_series = qual_rc_series[qual_rc_series != '']
                         qual_rc_series = qual_rc_series.apply(lambda x: x.split(':', 1)[1].strip() if x.lower().startswith('autre:') else x)
-                        qual_rc_counts = qual_rc_series.value_counts().reset_index()
-                        qual_rc_counts.columns = ['Qualité', 'Nombre']
-                        fig_rc_qual = px.bar(qual_rc_counts, x='Qualité', y='Nombre', title="Quelles qualités associez-vous à RougeCongo ?")
+                        qual_rc_counts = qual_rc_series.value_counts()
+                        nb_rc_qual_rep = df_combined_filt['RC_Qual'].notna().sum()
+                        qual_rc_pct = qual_rc_counts / nb_rc_qual_rep * 100
+                        qual_rc_df = qual_rc_pct.reset_index()
+                        qual_rc_df.columns = ['Qualité', 'Pourcentage']
+                        # Regrouper < 1%
+                        qual_rc_df['groupe'] = qual_rc_df['Pourcentage'].apply(lambda x: 'Autres' if x < 1 else x)
+                        qual_rc_agg = qual_rc_df.groupby('groupe')['Pourcentage'].sum().reset_index()
+                        qual_rc_agg.columns = ['Qualité', 'Pourcentage']
+                        qual_rc_agg['ordre'] = qual_rc_agg['Qualité'].apply(lambda x: 0 if x != 'Autres' else 1)
+                        qual_rc_agg = qual_rc_agg.sort_values('ordre').drop(columns=['ordre'])
+                        fig_rc_qual = px.bar(qual_rc_agg, x='Qualité', y='Pourcentage',
+                                            labels={'Qualité': 'Qualité évoquée', 'Pourcentage': 'Pourcentage des répondants (%)'},
+                                            title="Qualités attribuées à RougeCongo")
+                        fig_rc_qual.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
                         fig_rc_qual.update_layout(template="gilroy_export")
                         fig_rc_qual = force_black_axes(fig_rc_qual)
                         st.plotly_chart(fig_rc_qual, use_container_width=True)
+                        st.caption(f"Basé sur {nb_rc_qual_rep} répondants ayant répondu à cette question. Les qualités à moins de 1% sont regroupées dans 'Autres'. Un répondant peut citer plusieurs qualités.")
                     else:
                         st.info("Aucune réponse sur les qualités.")
 
@@ -2949,7 +3199,7 @@ with tabs[2]:
 # ONGLET 3 : MÉNAGES
 # ------------------------------------------------------------
 with tabs[3]:
-    st.header("Questionnaires Ménage")
+    st.header("🏠 Questionnaires Ménage")
 
     # ═══════════════════════════════════════════════════════
     # Construction du DataFrame unifié (sans filtre magasin)
@@ -3064,13 +3314,11 @@ with tabs[3]:
         df_menage_unifie = pd.DataFrame(rows_unified)
 
         if not df_menage_unifie.empty:
-            # --- Conversion des quantités et volumes unitaires (gestion 0 -> 1, décimales) ---
-            # Quantité nombre : remplacer 0 par 1
+            # Conversion des quantités et volumes unitaires
             df_menage_unifie['quantite_nombre'] = pd.to_numeric(
                 df_menage_unifie['quantite_nombre'].astype(str).str.replace(',', '.'), errors='coerce')
             df_menage_unifie['quantite_nombre'] = df_menage_unifie['quantite_nombre'].replace(0, 1)
 
-            # Volume unitaire : conversion virgule->point puis numérique, détection ml
             df_menage_unifie['volume_unitaire_l'] = pd.to_numeric(
                 df_menage_unifie['volume_unitaire_l'].astype(str).str.replace(',', '.'), errors='coerce')
             seuil_ml = 50
@@ -3079,7 +3327,6 @@ with tabs[3]:
                 st.warning(f"🔧 {mask_ml.sum()} volumes unitaires > {seuil_ml} détectés – conversion automatique en litres (÷1000).")
                 df_menage_unifie.loc[mask_ml, 'volume_unitaire_l'] = df_menage_unifie.loc[mask_ml, 'volume_unitaire_l'] / 1000
 
-            # Volume total pour ménages purs et supermarche_menage
             mask_pur_sm = df_menage_unifie['type_original'].isin(['menage', 'supermarche_menage'])
             df_menage_unifie['volume_total_l'] = np.nan
             if mask_pur_sm.any():
@@ -3087,12 +3334,10 @@ with tabs[3]:
                 vol_unit = df_menage_unifie.loc[mask_pur_sm, 'volume_unitaire_l']
                 df_menage_unifie.loc[mask_pur_sm, 'volume_total_l'] = nb * vol_unit
 
-            # Volume pour supermarché (déjà extrait)
             mask_s = df_menage_unifie['type_original'] == 'supermarche'
             if mask_s.any():
                 df_menage_unifie.loc[mask_s, 'volume_total_l'] = df_menage_unifie.loc[mask_s, 'volume_total_l_supermarche']
 
-            # Prix numérique
             df_menage_unifie['prix_num'] = pd.to_numeric(
                 df_menage_unifie['prix_paye'].astype(str).str.replace(',', '.'), errors='coerce')
             df_menage_unifie['prix_litre'] = np.where(
@@ -3102,12 +3347,10 @@ with tabs[3]:
             )
             df_menage_unifie['prix_litre'].replace([np.inf, -np.inf], np.nan, inplace=True)
 
-            # Taille du ménage (sécurisée)
             df_menage_unifie['taille_menage'] = pd.to_numeric(df_menage_unifie['nb_personnes'], errors='coerce')
 
             # Marque nettoyée (mapping strict)
             df_menage_unifie['marque_clean'] = apply_brand_mapping_strict(df_menage_unifie['marque_preferee'])
-            # Correction spécifique : supermarche_menage "mbila" → "En vrac"
             mask_sm_menage = df_menage_unifie['type_original'] == 'supermarche_menage'
             df_menage_unifie.loc[mask_sm_menage & (df_menage_unifie['marque_clean'] == 'mbila'), 'marque_clean'] = 'En vrac'
 
@@ -3133,9 +3376,7 @@ with tabs[3]:
                 'Une fois par trimestre': 0.33,
                 'Moins souvent': 0.166
             }
-            # Nettoyage : transformer en chaîne, enlever les espaces superflus
             df_menage_unifie['frequence'] = df_menage_unifie['frequence'].astype(str).str.strip()
-            # Si la valeur est un nombre pur (ex. '5'), on la remplace par NaN pour ne pas fausser le graphique
             df_menage_unifie.loc[df_menage_unifie['frequence'].str.match(r'^\d+(\.\d+)?$'), 'frequence'] = np.nan
             df_menage_unifie['freq_num'] = df_menage_unifie['frequence'].map(freq_map)
 
@@ -3174,7 +3415,6 @@ with tabs[3]:
                 df_menage_unifie.loc[mask_m, 'zone_socioeco'] = df_menage_unifie.loc[mask_m, 'commune'].apply(zone_from_commune)
 
             df_menage_unifie['zone_socioeco'] = df_menage_unifie['zone_socioeco'].replace('', 'Inconnu').fillna('Inconnu')
-            # Exclure les questionnaires avec statut 'Refus' (si la colonne existe)
             if 'statut' in df_menage_unifie.columns:
                 df_menage_unifie = df_menage_unifie[df_menage_unifie['statut'] != 'Refus'].copy()
     else:
@@ -3223,6 +3463,7 @@ with tabs[3]:
         df_m['Âge'] = df_m['sexe_age'].apply(get_age_menage)
         df_m['Tranche_age'] = df_m['Âge'].apply(tranche_age)
 
+        # Filtres
         col_f1, col_f2, col_f3 = st.columns(3)
         with col_f1:
             communes_disponibles = sorted(df_m['commune'].dropna().unique())
@@ -3321,28 +3562,35 @@ with tabs[3]:
             with col_a:
                 data_taille = df_m.loc[taille_valide, 'taille_menage']
                 fig_taille = px.histogram(data_taille, x='taille_menage', nbins=20,
-                                          title="Distribution de la taille des ménages",
-                                          labels={'taille_menage': 'Nombre de personnes'})
+                                          histnorm='percent',
+                                          labels={'taille_menage': 'Nombre de personnes', 'percent': 'Pourcentage des ménages (%)'},
+                                          title="Distribution de la taille des ménages")
+                fig_taille.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
                 fig_taille.update_layout(template="gilroy_export")
                 fig_taille = force_black_axes(fig_taille)
                 st.plotly_chart(fig_taille, use_container_width=True)
-                st.caption(f"Basé sur {nb_taille} réponses (exclusion de {nb_taille_exclus} ménages non valides).")
+                st.caption(f"Basé sur {nb_taille} ménages valides (exclusion de {nb_taille_exclus} ménages non valides).")
             with col_b:
-                zone_counts = df_m['zone_socioeco'].value_counts().reset_index()
-                zone_counts.columns = ['Zone socioéconomique', 'Nombre de ménages']
-                zone_counts = zone_counts[zone_counts['Zone socioéconomique'] != 'Inconnu']
+                zone_counts = df_m['zone_socioeco'].value_counts()
+                zone_pct = zone_counts / zone_counts.sum() * 100
+                zone_df = zone_pct.reset_index()
+                zone_df.columns = ['Zone socioéconomique', 'Pourcentage']
+                zone_df = zone_df[zone_df['Zone socioéconomique'] != 'Inconnu']
                 nb_inconnus_zone = len(df_m[df_m['zone_socioeco'] == 'Inconnu'])
                 ordre = ['Aisé', 'Moyen', 'Populaire', 'Non classé']
-                zone_counts['ordre'] = zone_counts['Zone socioéconomique'].apply(
+                zone_df['ordre'] = zone_df['Zone socioéconomique'].apply(
                     lambda x: ordre.index(x) if x in ordre else 99)
-                zone_counts = zone_counts.sort_values('ordre')
-                fig_zone = px.bar(zone_counts, x='Zone socioéconomique', y='Nombre de ménages',
+                zone_df = zone_df.sort_values('ordre')
+                fig_zone = px.bar(zone_df, x='Zone socioéconomique', y='Pourcentage',
+                                  color='Zone socioéconomique',
+                                  labels={'Zone socioéconomique': 'Zone', 'Pourcentage': 'Pourcentage des ménages (%)'},
                                   title="Ménages interrogés par zone socioéconomique",
-                                  color='Zone socioéconomique', color_discrete_sequence=px.colors.qualitative.Pastel)
+                                  color_discrete_sequence=px.colors.qualitative.Pastel)
+                fig_zone.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
                 fig_zone.update_layout(showlegend=False, template="gilroy_export")
                 fig_zone = force_black_axes(fig_zone)
                 st.plotly_chart(fig_zone, use_container_width=True)
-                st.caption(f"{nb_inconnus_zone} ménages avec zone 'Inconnu' exclus du graphique.")
+                st.caption(f"Basé sur {zone_pct.sum()} ménages (exclusion de {nb_inconnus_zone} ménages 'Inconnu').")
 
             st.subheader("📏 Taille moyenne du ménage par zone socioéconomique")
             df_tz = df_m[taille_valide & (df_m['zone_socioeco'] != 'Inconnu')]
@@ -3353,53 +3601,57 @@ with tabs[3]:
             taille_zone = taille_zone.sort_values('ordre')
             fig_tz = px.bar(taille_zone, x='Zone socioéconomique', y='Taille moyenne',
                             text='Taille moyenne', color='Zone socioéconomique',
+                            labels={'Zone socioéconomique': 'Zone', 'Taille moyenne': 'Taille moyenne (personnes)'},
                             color_discrete_sequence=px.colors.qualitative.Pastel)
             fig_tz.update_traces(texttemplate='%{text:.1f} pers.', textposition='outside')
             fig_tz.update_layout(showlegend=False, yaxis_title="Personnes", template="gilroy_export")
             fig_tz = force_black_axes(fig_tz)
             st.plotly_chart(fig_tz, use_container_width=True)
+            st.caption(f"Basé sur {len(df_tz)} ménages valides avec zone connue.")
 
             # ── VOLUME ET FRÉQUENCE ──
             st.subheader("🛒 Volume et fréquence d'achat")
             col1, col2 = st.columns(2)
             with col1:
-                # Camembert par tranches de volume
-                df_vol = df_m[df_m['volume_total_l'].notna() & (df_m['volume_total_l'] <= seuil_volume) & (df_m['volume_total_l'] > 0)].copy()
+                # Distribution des volumes achetés (uniquement les conditionnements avec acheteurs)
+                df_vol = df_m[df_m['volume_total_l'].notna() & (df_m['volume_total_l'] > 0) & (df_m['volume_total_l'] <= seuil_volume)].copy()
                 if not df_vol.empty:
-                    def tranche_vol(x):
-                        if x < 0.5:
-                            return '<0,5 L'
-                        elif x <= 1:
-                            return '0,5-1 L'
-                        elif x <= 2:
-                            return '1-2 L'
-                        elif x <= 3:
-                            return '2-3 L'
-                        elif x <= 4:
-                            return '3-4 L'
-                        elif x <= 5:
-                            return '4-5 L'
-                        else:
-                            return '>5 L'
-                    df_vol['tranche_vol'] = df_vol['volume_total_l'].apply(tranche_vol)
-                    vol_counts = df_vol['tranche_vol'].value_counts().reset_index()
-                    vol_counts.columns = ['Tranche de volume', 'Nombre']
-                    fig_vol_pie = px.pie(vol_counts, values='Nombre', names='Tranche de volume',
-                                         title="Volume acheté (% des répondants)",
-                                         category_orders={'Tranche de volume': ['<1 L', '1-4 L', '5 L', '>5 L']})
-                    fig_vol_pie.update_layout(template="gilroy_export")
-                    fig_vol_pie = force_black_axes(fig_vol_pie)
-                    st.plotly_chart(fig_vol_pie, use_container_width=True)
-                    st.caption(f"Basé sur {len(df_vol)} répondants avec un volume valide.")
+                    # On crée des tranches de volume en fonction des conditionnements disponibles dans les prix externes
+                    # Mais ici on utilise les volumes réels des acheteurs, on fait des tranches continues
+                    df_vol['tranche_vol'] = pd.cut(df_vol['volume_total_l'], 
+                                                   bins=[0, 0.5, 1, 2, 3, 4, 5, float('inf')],
+                                                   labels=['<0,5 L', '0,5-1 L', '1-2 L', '2-3 L', '3-4 L', '4-5 L', '>5 L'],
+                                                   right=False)
+                    # On enlève les catégories vides
+                    vol_counts = df_vol['tranche_vol'].value_counts()
+                    vol_pct = vol_counts / vol_counts.sum() * 100
+                    vol_df = vol_pct.reset_index()
+                    vol_df.columns = ['Tranche de volume', 'Pourcentage']
+                    # Tri selon l'ordre des catégories
+                    ordre_vol = ['<0,5 L', '0,5-1 L', '1-2 L', '2-3 L', '3-4 L', '4-5 L', '>5 L']
+                    vol_df['Tranche de volume'] = pd.Categorical(vol_df['Tranche de volume'], categories=ordre_vol, ordered=True)
+                    vol_df = vol_df.sort_values('Tranche de volume')
+                    # Graphique en barres (pas de texte au-dessus)
+                    fig_vol = px.bar(vol_df, x='Tranche de volume', y='Pourcentage',
+                                     labels={'Tranche de volume': 'Volume acheté', 'Pourcentage': 'Pourcentage des répondants (%)'},
+                                     title="Distribution des volumes achetés")
+                    fig_vol.update_traces(textposition='none')
+                    fig_vol.update_layout(template="gilroy_export")
+                    fig_vol = force_black_axes(fig_vol)
+                    st.plotly_chart(fig_vol, use_container_width=True)
+                    st.caption(f"Basé sur {len(df_vol)} répondants avec un volume valide (≤ {seuil_volume} L).")
                 else:
                     st.info("Aucun volume valide.")
             with col2:
                 freq_df = df_m[acheteurs_mask].dropna(subset=['frequence'])
                 if not freq_df.empty:
-                    freq_counts = freq_df['frequence'].value_counts().reset_index()
-                    freq_counts.columns = ['Fréquence', 'Nombre']
-                    fig_freq = px.pie(freq_counts, values='Nombre', names='Fréquence',
+                    freq_counts = freq_df['frequence'].value_counts()
+                    freq_pct = freq_counts / freq_counts.sum() * 100
+                    freq_df_plot = freq_pct.reset_index()
+                    freq_df_plot.columns = ['Fréquence', 'Pourcentage']
+                    fig_freq = px.pie(freq_df_plot, values='Pourcentage', names='Fréquence',
                                       title="Fréquence d'achat (acheteurs)")
+                    fig_freq.update_traces(textinfo='percent+label')
                     fig_freq.update_layout(template="gilroy_export")
                     fig_freq = force_black_axes(fig_freq)
                     st.plotly_chart(fig_freq, use_container_width=True)
@@ -3409,24 +3661,39 @@ with tabs[3]:
 
             # ── MARQUE ──
             st.subheader("🏷️ Marque (préférée ou achetée)")
-            marque_counts = df_m['marque_clean'].dropna().value_counts().reset_index()
-            marque_counts.columns = ['Marque', 'Nombre']
-            if not marque_counts.empty:
-                fig_marque = px.pie(marque_counts, values='Nombre', names='Marque',
-                                    title="Répartition des marques")
+            # Calcul du top 8 des marques
+            marque_serie = df_m['marque_clean'].dropna()
+            top8_marques_men = marque_serie.value_counts().head(8).index.tolist()
+            marque_counts = marque_serie.value_counts()
+            marque_pct = marque_counts / len(df_m) * 100  # sur l'ensemble des répondants
+            marque_df = marque_pct.reset_index()
+            marque_df.columns = ['Marque', 'Pourcentage']
+            # Top 8 + Autres, avec tri pour mettre "Autres" en dernier
+            top8_df = marque_df[marque_df['Marque'].isin(top8_marques_men)]
+            autres_pct = marque_df[~marque_df['Marque'].isin(top8_marques_men)]['Pourcentage'].sum()
+            if autres_pct > 0:
+                top8_df = pd.concat([top8_df, pd.DataFrame({'Marque': ['Autres'], 'Pourcentage': [autres_pct]})], ignore_index=True)
+            # Trier pour que "Autres" soit en dernier
+            top8_df['ordre'] = top8_df['Marque'].apply(lambda x: 0 if x != 'Autres' else 1)
+            top8_df = top8_df.sort_values('ordre').drop(columns=['ordre'])
+
+            if not top8_df.empty:
+                fig_marque = px.pie(top8_df, values='Pourcentage', names='Marque',
+                                    title="Répartition des marques (top 8 + Autres)")
+                fig_marque.update_traces(textinfo='percent+label', sort=False)
                 fig_marque.update_layout(template="gilroy_export")
                 fig_marque = force_black_axes(fig_marque)
                 st.plotly_chart(fig_marque, use_container_width=True)
-                st.caption(f"Basé sur {nb_marque} réponses avec marque reconnue.")
-
-                with st.expander("🔍 Inspecter les marques brutes pour une marque sélectionnée"):
-                    marque_choisie = st.selectbox("Choisir une marque (clean)", marque_counts['Marque'].tolist(), key="inspect_marque")
-                    if marque_choisie:
-                        sub_inspect = df_m[df_m['marque_clean'] == marque_choisie][['uuid', 'type_original', 'marque_preferee', 'marque_clean']]
-                        st.dataframe(sub_inspect, use_container_width=True)
-                        st.caption(f"{len(sub_inspect)} questionnaires pour la marque '{marque_choisie}'")
+                st.caption(f"Basé sur {marque_serie.notna().sum()} réponses avec marque reconnue. Pourcentage calculé sur l'ensemble des répondants ({len(df_m)}).")
             else:
                 st.info("Aucune marque.")
+
+            with st.expander("🔍 Inspecter les marques brutes pour une marque sélectionnée"):
+                marque_choisie = st.selectbox("Choisir une marque (clean)", top8_marques_men if top8_marques_men else [""])
+                if marque_choisie:
+                    sub_inspect = df_m[df_m['marque_clean'] == marque_choisie][['uuid', 'type_original', 'marque_preferee', 'marque_clean']]
+                    st.dataframe(sub_inspect, use_container_width=True)
+                    st.caption(f"{len(sub_inspect)} questionnaires pour la marque '{marque_choisie}'")
 
             # ── PRIX AU LITRE ──
             st.subheader("💲 Prix au litre")
@@ -3434,7 +3701,9 @@ with tabs[3]:
             prix_plot = df_m[(df_m['prix_litre'].notna()) & (df_m['prix_litre'] <= seuil_prix_affichage)]
             nb_exclus_prix = df_m['prix_litre'].notna().sum() - len(prix_plot)
             if not prix_plot.empty:
-                fig_prix = px.box(prix_plot, y='prix_litre', title="Distribution du prix au litre")
+                fig_prix = px.box(prix_plot, y='prix_litre',
+                                  labels={'prix_litre': f'Prix au litre ({devise_aff})'},
+                                  title="Distribution du prix au litre")
                 if devise_aff == "FC":
                     fig_prix.update_yaxes(tickformat=",.0f", ticksuffix=" FC")
                 else:
@@ -3455,14 +3724,27 @@ with tabs[3]:
                 if pret_oui > 0:
                     crits = df_m[df_m['pret_plus']]['criteres'].explode().dropna()
                     crits = crits[~crits.str.lower().str.contains('non|pas prêt|ne suis pas', na=False)]
-                    crit_counts = crits.value_counts().reset_index()
-                    crit_counts.columns = ['Critère', 'Nombre']
-                    fig_crit = px.bar(crit_counts, x='Critère', y='Nombre',
-                                      title="Critères pour payer plus cher")
+                    crit_counts = crits.value_counts()
+                    crit_pct = crit_counts / pret_oui * 100
+                    crit_df = crit_pct.reset_index()
+                    crit_df.columns = ['Critère', 'Pourcentage']
+                    # Top 8 + Autres avec tri
+                    top_crit = crit_df.head(8)
+                    autres_crit = crit_df.iloc[8:]['Pourcentage'].sum()
+                    if autres_crit > 0:
+                        top_crit = pd.concat([top_crit, pd.DataFrame({'Critère': ['Autres'], 'Pourcentage': [autres_crit]})], ignore_index=True)
+                    top_crit['ordre'] = top_crit['Critère'].apply(lambda x: 0 if x != 'Autres' else 1)
+                    top_crit = top_crit.sort_values('ordre').drop(columns=['ordre'])
+                    fig_crit = px.bar(top_crit, x='Critère', y='Pourcentage',
+                                      labels={'Critère': 'Critère', 'Pourcentage': 'Pourcentage des prêts à payer plus (%)'},
+                                      title="Critères pour payer plus cher (top 8)")
+                    fig_crit.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
                     fig_crit.update_layout(template="gilroy_export")
                     fig_crit = force_black_axes(fig_crit)
                     st.plotly_chart(fig_crit, use_container_width=True)
+                    st.caption(f"Basé sur {pret_oui} répondants prêts à payer plus. Un répondant peut citer plusieurs critères.")
 
+                    # Écart de prix
                     df_pret = df_m[df_m['pret_plus']].dropna(subset=['prix_num', 'prix_max']).copy()
                     if not df_pret.empty:
                         df_pret['ecart_rel'] = (pd.to_numeric(df_pret['prix_max'], errors='coerce') /
@@ -3470,16 +3752,30 @@ with tabs[3]:
                         df_pret = df_pret[df_pret['ecart_rel'].notna() & (df_pret['ecart_rel'].abs() < 1000)]
                         exploded = df_pret.explode('criteres')
                         exploded = exploded[~exploded['criteres'].str.lower().str.contains('non|pas prêt|ne suis pas', na=False)]
-                        ecart_crit = exploded.groupby('criteres')['ecart_rel'].agg(['mean', 'count']).reset_index()
-                        ecart_crit.columns = ['Critère', 'Écart moyen (%)', 'Nb répondants']
-                        ecart_crit['Écart moyen (%)'] = ecart_crit['Écart moyen (%)'].round(1)
-                        fig_ecart = px.bar(ecart_crit, x='Critère', y='Écart moyen (%)',
-                                           text='Nb répondants',
-                                           title="% moyen que les acheteurs sont prêts à payer en plus, par critère")
-                        fig_ecart.update_traces(texttemplate='%{text}', textposition='outside')
-                        fig_ecart.update_layout(template="gilroy_export")
-                        fig_ecart = force_black_axes(fig_ecart)
-                        st.plotly_chart(fig_ecart, use_container_width=True)
+                        if not exploded.empty:
+                            ecart_crit = exploded.groupby('criteres')['ecart_rel'].agg(['mean', 'count']).reset_index()
+                            ecart_crit.columns = ['Critère', 'Écart moyen (%)', 'Nb répondants']
+                            ecart_crit['Écart moyen (%)'] = ecart_crit['Écart moyen (%)'].round(1)
+                            top_ecart = ecart_crit.sort_values('Nb répondants', ascending=False).head(8)
+                            autres_ecart = ecart_crit.iloc[8:].copy()
+                            if not autres_ecart.empty:
+                                autres_row = pd.DataFrame({
+                                    'Critère': ['Autres'],
+                                    'Écart moyen (%)': [autres_ecart['Écart moyen (%)'].mean()],
+                                    'Nb répondants': [autres_ecart['Nb répondants'].sum()]
+                                })
+                                top_ecart = pd.concat([top_ecart, autres_row], ignore_index=True)
+                            top_ecart['ordre'] = top_ecart['Critère'].apply(lambda x: 0 if x != 'Autres' else 1)
+                            top_ecart = top_ecart.sort_values('ordre').drop(columns=['ordre'])
+                            fig_ecart = px.bar(top_ecart, x='Critère', y='Écart moyen (%)',
+                                               text='Nb répondants',
+                                               labels={'Critère': 'Critère', 'Écart moyen (%)': 'Écart moyen (%)'},
+                                               title="% moyen que les acheteurs sont prêts à payer en plus, par critère (top 8)")
+                            fig_ecart.update_traces(texttemplate='%{text}', textposition='outside')
+                            fig_ecart.update_layout(template="gilroy_export")
+                            fig_ecart = force_black_axes(fig_ecart)
+                            st.plotly_chart(fig_ecart, use_container_width=True)
+                            st.caption(f"Basé sur {len(df_pret)} répondants prêts à payer plus avec données de prix valides.")
                     else:
                         st.info("Données insuffisantes pour le calcul de l'écart.")
                 else:
@@ -3493,13 +3789,32 @@ with tabs[3]:
                 qual_ser = df_m['qualite'].dropna().astype(str).str.split(',').explode().str.strip()
                 qual_ser = qual_ser[qual_ser != '']
                 qual_ser = qual_ser.apply(lambda x: x.split(':',1)[1].strip() if x.lower().startswith('autre:') else x)
-                qual_counts = qual_ser.value_counts().reset_index()
-                qual_counts.columns = ['Critère', 'Nombre']
-                fig_qual = px.bar(qual_counts, x='Critère', y='Nombre',
-                                  title="Comment reconnaissez-vous la qualité ?")
-                fig_qual.update_layout(template="gilroy_export")
-                fig_qual = force_black_axes(fig_qual)
-                st.plotly_chart(fig_qual, use_container_width=True)
+                qual_counts = qual_ser.value_counts()
+                qual_pct = qual_counts / nb_qual * 100  # basé sur le nombre de répondants à cette question
+                qual_df = qual_pct.reset_index()
+                qual_df.columns = ['Critère', 'Pourcentage']
+                # Regrouper les moins de 1% dans "Autres"
+                qual_df['groupe'] = qual_df['Pourcentage'].apply(lambda x: 'Autres' if x < 1 else x)
+                # On garde les critères avec >=1%, on regroupe les autres
+                qual_df_main = qual_df[qual_df['groupe'] != 'Autres'].copy()
+                autres_pct_qual = qual_df[qual_df['groupe'] == 'Autres']['Pourcentage'].sum()
+                if autres_pct_qual > 0:
+                    qual_df_main = pd.concat([qual_df_main, pd.DataFrame({'Critère': ['Autres'], 'Pourcentage': [autres_pct_qual]})], ignore_index=True)
+                # Tri pour mettre "Autres" en dernier
+                qual_df_main['ordre'] = qual_df_main['Critère'].apply(lambda x: 0 if x != 'Autres' else 1)
+                qual_df_main = qual_df_main.sort_values('ordre').drop(columns=['ordre'])
+
+                if not qual_df_main.empty:
+                    fig_qual = px.bar(qual_df_main, x='Critère', y='Pourcentage',
+                                      labels={'Critère': 'Critère', 'Pourcentage': 'Pourcentage des répondants (%)'},
+                                      title="Critères de reconnaissance de la qualité de l'huile")
+                    fig_qual.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
+                    fig_qual.update_layout(template="gilroy_export")
+                    fig_qual = force_black_axes(fig_qual)
+                    st.plotly_chart(fig_qual, use_container_width=True)
+                    st.caption(f"Basé sur {nb_qual} répondants ayant répondu à la question. Les critères à moins de 1% sont regroupés dans 'Autres'.")
+                else:
+                    st.info("Aucun critère.")
             else:
                 st.info("Aucune réponse.")
 
@@ -3508,14 +3823,20 @@ with tabs[3]:
             col_c, col_q = st.columns(2)
             with col_c:
                 if nb_rc_conn > 0:
-                    conn = df_m['rc_connaissance'].dropna().loc[lambda x: x != ''].value_counts().reset_index()
-                    conn.columns = ['Réponse', 'Nombre']
-                    if not conn.empty:
-                        fig_conn = px.bar(conn, x='Réponse', y='Nombre',
+                    conn = df_m['rc_connaissance'].dropna().loc[lambda x: x != '']
+                    conn_counts = conn.value_counts()
+                    conn_pct = conn_counts / nb_rc_conn * 100
+                    conn_df = conn_pct.reset_index()
+                    conn_df.columns = ['Réponse', 'Pourcentage']
+                    if not conn_df.empty:
+                        fig_conn = px.bar(conn_df, x='Réponse', y='Pourcentage',
+                                          labels={'Réponse': 'Réponse', 'Pourcentage': 'Pourcentage des répondants (%)'},
                                           title="Connaissance de RougeCongo")
+                        fig_conn.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
                         fig_conn.update_layout(template="gilroy_export")
                         fig_conn = force_black_axes(fig_conn)
                         st.plotly_chart(fig_conn, use_container_width=True)
+                        st.caption(f"Basé sur {nb_rc_conn} répondants ayant répondu à la question.")
                     else:
                         st.info("Aucune réponse valide.")
                 else:
@@ -3525,14 +3846,29 @@ with tabs[3]:
                     qual_rc = df_m['rc_qualites'].dropna().astype(str).str.split(',').explode().str.strip()
                     qual_rc = qual_rc[qual_rc != '']
                     qual_rc = qual_rc.apply(lambda x: x.split(':',1)[1].strip() if x.lower().startswith('autre:') else x)
-                    qc = qual_rc.value_counts().reset_index()
-                    qc.columns = ['Qualité', 'Nombre']
-                    if not qc.empty:
-                        fig_rc_qual = px.bar(qc, x='Qualité', y='Nombre',
-                                             title="Qualités attribuées à RougeCongo")
+                    qc = qual_rc.value_counts()
+                    qc_pct = qc / nb_rc_qual * 100
+                    qc_df = qc_pct.reset_index()
+                    qc_df.columns = ['Qualité', 'Pourcentage']
+                    # Regrouper les moins de 1% dans "Autres"
+                    qc_df['groupe'] = qc_df['Pourcentage'].apply(lambda x: 'Autres' if x < 1 else x)
+                    qc_df_main = qc_df[qc_df['groupe'] != 'Autres'].copy()
+                    autres_pct_qc = qc_df[qc_df['groupe'] == 'Autres']['Pourcentage'].sum()
+                    if autres_pct_qc > 0:
+                        qc_df_main = pd.concat([qc_df_main, pd.DataFrame({'Qualité': ['Autres'], 'Pourcentage': [autres_pct_qc]})], ignore_index=True)
+                    # Tri pour mettre "Autres" en dernier
+                    qc_df_main['ordre'] = qc_df_main['Qualité'].apply(lambda x: 0 if x != 'Autres' else 1)
+                    qc_df_main = qc_df_main.sort_values('ordre').drop(columns=['ordre'])
+
+                    if not qc_df_main.empty:
+                        fig_rc_qual = px.bar(qc_df_main, x='Qualité', y='Pourcentage',
+                                             labels={'Qualité': 'Qualité', 'Pourcentage': 'Pourcentage des répondants (%)'},
+                                             title="Qualités associées à RougeCongo")
+                        fig_rc_qual.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
                         fig_rc_qual.update_layout(template="gilroy_export")
                         fig_rc_qual = force_black_axes(fig_rc_qual)
                         st.plotly_chart(fig_rc_qual, use_container_width=True)
+                        st.caption(f"Basé sur {nb_rc_qual} répondants ayant cité des qualités. Les qualités à moins de 1% sont regroupées dans 'Autres'.")
                     else:
                         st.info("Aucune réponse.")
                 else:
@@ -3560,11 +3896,13 @@ with tabs[3]:
                         df_moy = df_lieux.groupby('Catégorie')['Pourcentage'].mean().reset_index()
                         df_moy.columns = ['Catégorie', 'Pourcentage moyen']
                         fig_lieux = px.bar(df_moy, x='Catégorie', y='Pourcentage moyen',
+                                           labels={'Catégorie': 'Canal d\'achat', 'Pourcentage moyen': 'Part moyenne (%)'},
                                            title="Part moyenne des dépenses par canal")
+                        fig_lieux.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
                         fig_lieux.update_layout(template="gilroy_export")
                         fig_lieux = force_black_axes(fig_lieux)
                         st.plotly_chart(fig_lieux, use_container_width=True)
-                        st.caption(f"Basé sur {len(df_pct)} questionnaires.")
+                        st.caption(f"Basé sur {len(df_pct)} questionnaires. Les pourcentages sont des moyennes par répondant.")
                     else:
                         st.info("Aucune répartition exploitable.")
                 else:
@@ -3621,7 +3959,7 @@ with tabs[4]:
     k_overrides = load_k_overrides()
 
     # --------------------------------------------------------
-    # Fonctions internes à l'onglet
+    # Fonctions internes à l'onglet (inchangées)
     # --------------------------------------------------------
     def get_effective_profile(magasin, jour_code):
         nom_google = magasin_mapping.get(magasin)
@@ -3952,7 +4290,7 @@ with tabs[4]:
         fig.update_xaxes(title_text="Heure", tickvals=heures[::2],
                          ticktext=[f"{h}h" for h in heures[::2]], row=1, col=1)
         fig.update_yaxes(title_text="Clients estimés / heure", tickformat=",.0f", row=1, col=1, secondary_y=False)
-        fig.update_yaxes(title_text="k", row=1, col=1, secondary_y=True)
+        fig.update_yaxes(title_text="Facteur k", row=1, col=1, secondary_y=True)
 
         # Sous-graphique 2
         fig.add_trace(go.Bar(x=heures, y=pct_sem, name='% couverture semaine',
@@ -3977,11 +4315,14 @@ with tabs[4]:
         fig.update_xaxes(title_text="Heure", tickvals=heures[::2],
                          ticktext=[f"{h}h" for h in heures[::2]], row=2, col=1)
         fig.update_yaxes(title_text="% couverture", row=2, col=1, secondary_y=False)
-        fig.update_yaxes(title_text="k", row=2, col=1, secondary_y=True)
+        fig.update_yaxes(title_text="Facteur k", row=2, col=1, secondary_y=True)
 
         fig.update_layout(height=800, title_text=f"Analyse intégrée – {mag_choisi}", template="gilroy_export")
         fig = force_black_axes(fig)
         st.plotly_chart(fig, use_container_width=True, key="analyse_integree")
+        # Note
+        nb_comptages = len(details)
+        st.caption(f"Basé sur {nb_comptages} session(s) de comptage pour ce magasin. Les boxplots montrent la distribution des facteurs k par heure.")
 
     # --------------------------------------------------------
     # 2.4 – Périodes d’affluence par secteur (Google)
@@ -4005,12 +4346,14 @@ with tabs[4]:
                     vals = [np.mean([row.get(f"{j}_{h}", 0.0) for j in ['Mo','Tu','We','Th','Fr']]) for h in range(24)]
                     sem_data.append(vals)
                 df_sem_heat = pd.DataFrame(sem_data, index=secteurs_a_afficher, columns=[f"{h}h" for h in range(24)])
-                fig_heat_sem = px.imshow(df_sem_heat, labels=dict(x="Heure", y="Secteur", color="Occupancy %"),
-                                         title="Affluence semaine")
+                fig_heat_sem = px.imshow(df_sem_heat,
+                                         labels=dict(x="Heure", y="Secteur", color="Occupation (%)"),
+                                         title="Affluence moyenne en semaine (lun-ven)")
                 fig_heat_sem.update_xaxes(tickvals=list(range(0,24,2)))
                 fig_heat_sem.update_layout(template="gilroy_export")
                 fig_heat_sem = force_black_axes(fig_heat_sem)
                 st.plotly_chart(fig_heat_sem, use_container_width=True, key="heat_sem")
+                st.caption(f"Basé sur les profils Google de {len(df_sem_heat)} secteurs. Les valeurs sont en % d'occupation maximale.")
             with col2:
                 st.markdown("**Week‑end (sam‑dim)**")
                 we_data = []
@@ -4019,12 +4362,14 @@ with tabs[4]:
                     vals = [np.mean([row.get(f"{j}_{h}", 0.0) for j in ['Sa','Su']]) for h in range(24)]
                     we_data.append(vals)
                 df_we_heat = pd.DataFrame(we_data, index=secteurs_a_afficher, columns=[f"{h}h" for h in range(24)])
-                fig_heat_we = px.imshow(df_we_heat, labels=dict(x="Heure", y="Secteur", color="Occupancy %"),
-                                        title="Affluence week‑end")
+                fig_heat_we = px.imshow(df_we_heat,
+                                        labels=dict(x="Heure", y="Secteur", color="Occupation (%)"),
+                                        title="Affluence moyenne en week-end (sam-dim)")
                 fig_heat_we.update_xaxes(tickvals=list(range(0,24,2)))
                 fig_heat_we.update_layout(template="gilroy_export")
                 fig_heat_we = force_black_axes(fig_heat_we)
                 st.plotly_chart(fig_heat_we, use_container_width=True, key="heat_we")
+                st.caption(f"Basé sur les profils Google de {len(df_we_heat)} secteurs. Les valeurs sont en % d'occupation maximale.")
 
             secteur_sel = st.selectbox("Détail pour un secteur", secteurs_a_afficher, key="sect_detail")
             row_sec = secteur_profiles[secteur_profiles['secteur'] == secteur_sel].iloc[0]
@@ -4043,10 +4388,11 @@ with tabs[4]:
                 fig_pointe.add_shape(type="rect", x0=h-0.4, x1=h+0.4, y0=0, y1=val, fillcolor="orange", opacity=0.2, line_width=0)
 
             fig_pointe.update_xaxes(title_text="Heure", tickvals=heures[::2], ticktext=[f"{h}h" for h in heures[::2]])
-            fig_pointe.update_yaxes(title_text="Occupation %")
+            fig_pointe.update_yaxes(title_text="Occupation (%)")
             fig_pointe.update_layout(title=f"Profil d’affluence – secteur {secteur_sel} (avec top 3 heures)", template="gilroy_export")
             fig_pointe = force_black_axes(fig_pointe)
             st.plotly_chart(fig_pointe, use_container_width=True, key="pointe_secteur")
+            st.caption(f"Basé sur les données Google Popular Times pour le secteur {secteur_sel}. Les zones colorées mettent en évidence les 3 heures de pointe.")
 
             top_data = []
             for secteur in secteurs_a_afficher:
@@ -4067,6 +4413,7 @@ with tabs[4]:
             df_top = pd.DataFrame(top_data)
             st.subheader("Top 3 heures les plus chargées")
             st.dataframe(df_top, use_container_width=True)
+            st.caption(f"Basé sur les données Google Popular Times pour les {len(secteurs_a_afficher)} secteurs affichés.")
 
     # --------------------------------------------------------
     # 2.5 – Couverture des plages horaires (semaine vs week‑end)
@@ -4136,6 +4483,7 @@ with tabs[4]:
                                   template="gilroy_export")
             fig_cov = force_black_axes(fig_cov)
             st.plotly_chart(fig_cov, use_container_width=True, key="cov_hours")
+            st.caption(f"Basé sur {len(sessions)} sessions de comptage. Les rectangles colorés montrent les plages horaires couvertes, les zones grisées les horaires d'ouverture du magasin.")
 
             def compute_cov_hours(intervals):
                 merged = merge_intervals_minutes(intervals)
@@ -4176,6 +4524,7 @@ with tabs[4]:
                 df_points = pd.DataFrame(points)
                 fig_coher = px.scatter(df_points, x='flux_prédit', y='flux_réel',
                                        hover_data=['date', 'k', 'source'],
+                                       labels={'flux_prédit': 'Flux prédit (clients/h)', 'flux_réel': 'Flux réel (clients/h)'},
                                        title=f"Flux réel vs Flux prédit – {mag_c}")
                 max_val = max(df_points['flux_prédit'].max(), df_points['flux_réel'].max())
                 fig_coher.add_trace(go.Scatter(x=[0, max_val], y=[0, max_val], mode='lines',
@@ -4185,6 +4534,7 @@ with tabs[4]:
                 fig_coher.update_layout(template="gilroy_export")
                 fig_coher = force_black_axes(fig_coher)
                 st.plotly_chart(fig_coher, use_container_width=True, key="coherence")
+                st.caption(f"Basé sur {len(points)} sessions de comptage. La droite y=x représente une prédiction parfaite.")
             else:
                 st.info("Impossible de calculer les flux prédits (k manquant).")
 
@@ -4212,6 +4562,7 @@ with tabs[4]:
         df_aberr = pd.DataFrame(aberrants_list)
         st.warning(f"{len(df_aberr)} comptage(s) aberrant(s) détecté(s).")
         st.dataframe(df_aberr, use_container_width=True)
+        st.caption(f"Basé sur {len(df_aberr)} comptages identifiés comme aberrants selon le seuil IQR.")
     else:
         st.success("Aucun comptage aberrant détecté.")
 
@@ -4275,6 +4626,7 @@ with tabs[4]:
 
         df_estim = pd.DataFrame(rows_estimation)
         st.dataframe(df_estim[['Magasin', 'Jour semaine', 'Jour WE', 'Total hebdo']], use_container_width=True)
+        st.caption(f"Estimations basées sur {len(df_estim)} magasins avec facteur k calculable. Les intervalles sont donnés à ± demi-IQR.")
 
         # --------------------------------------------------------
         # Agrégation par segment
@@ -4304,32 +4656,39 @@ with tabs[4]:
             agg_median['Jour WE'] = agg_median.apply(lambda r: f"{fmt_volume(r['médiane_jour_we'])} ± {fmt_volume(r['iqr_jour_we'])}", axis=1)
             agg_median['Total hebdo'] = agg_median.apply(lambda r: f"{fmt_volume(r['médiane_total'])} ± {fmt_volume(r['iqr_total'])}", axis=1)
             st.dataframe(agg_median[['Segment', 'nb_magasins', 'Jour semaine', 'Jour WE', 'Total hebdo']], use_container_width=True)
+            st.caption(f"Basé sur {agg_median['nb_magasins'].sum()} magasins. Les intervalles sont donnés à ± demi-IQR.")
 
             col1, col2 = st.columns(2)
             with col1:
                 fig_box_sem = px.box(df_estim, x='Segment', y='sem_med',
+                                     labels={'Segment': 'Segment', 'sem_med': 'Clients estimés par jour de semaine'},
                                      title="Clients estimés par jour de semaine", points="all")
                 fig_box_sem.update_xaxes(tickangle=45)
                 fig_box_sem.update_yaxes(tickformat=",.0f")
                 fig_box_sem.update_layout(template="gilroy_export")
                 fig_box_sem = force_black_axes(fig_box_sem)
                 st.plotly_chart(fig_box_sem, use_container_width=True, key="box_sem")
+                st.caption(f"Basé sur {len(df_estim)} magasins. Les points représentent chaque magasin.")
             with col2:
                 fig_box_we = px.box(df_estim, x='Segment', y='we_med',
+                                    labels={'Segment': 'Segment', 'we_med': 'Clients estimés par jour de week-end'},
                                     title="Clients estimés par jour de week-end", points="all")
                 fig_box_we.update_xaxes(tickangle=45)
                 fig_box_we.update_yaxes(tickformat=",.0f")
                 fig_box_we.update_layout(template="gilroy_export")
                 fig_box_we = force_black_axes(fig_box_we)
                 st.plotly_chart(fig_box_we, use_container_width=True, key="box_we")
+                st.caption(f"Basé sur {len(df_estim)} magasins. Les points représentent chaque magasin.")
 
             fig_box_total = px.box(df_estim, x='Segment', y='total_med',
+                                   labels={'Segment': 'Segment', 'total_med': 'Total hebdomadaire estimé'},
                                    title="Total hebdomadaire estimé par magasin", points="all")
             fig_box_total.update_xaxes(tickangle=45)
             fig_box_total.update_yaxes(tickformat=",.0f")
             fig_box_total.update_layout(template="gilroy_export")
             fig_box_total = force_black_axes(fig_box_total)
             st.plotly_chart(fig_box_total, use_container_width=True, key="box_total")
+            st.caption(f"Basé sur {len(df_estim)} magasins. Les points représentent chaque magasin.")
 
         # --- Stockage sécurisé pour l'export ---
         if 'df_estim' in locals():
@@ -4369,7 +4728,7 @@ with tabs[4]:
     ))
 
     fig_freq_bars.update_layout(
-        barmode='stack',                     # ou 'group' si vous préférez côte à côte
+        barmode='stack',
         xaxis_title='Magasin',
         yaxis_title='Clients estimés par semaine',
         title='Fréquentation hebdomadaire estimée par magasin (semaine + week‑end)',
@@ -4380,9 +4739,10 @@ with tabs[4]:
     )
     fig_freq_bars = force_black_axes(fig_freq_bars)
     st.plotly_chart(fig_freq_bars, width='stretch')
+    st.caption(f"Basé sur {len(df_estim_sorted)} magasins avec facteur k calculable. Les barres empilées montrent la répartition semaine / week‑end.")
 
 # ------------------------------------------------------------
-# ONGLET 5 : ESTIMATION DU MARCHÉ (version finale complète et corrigée)
+# ONGLET 5 : ESTIMATION DU MARCHÉ
 # ------------------------------------------------------------
 with tabs[5]:
     st.header("📊 Estimation du marché de l'huile de palme rouge à Kinshasa")
@@ -5123,7 +5483,7 @@ with tabs[5]:
             st.metric("Méthode C", "N/A")
 
 # ------------------------------------------------------------
-# ONGLET 6 : PRIX & CONCURRENCE (version finale avec formatage et taux global)
+# ONGLET 6 : PRIX & CONCURRENCE 
 # ------------------------------------------------------------
 with tabs[6]:
     st.header("🏷️ Analyse des prix et concurrence")
@@ -5165,16 +5525,24 @@ with tabs[6]:
             lambda x: convertir_prix(x, devise, taux)
         )
 
-   # -------------------------------------------------------------
+    # Récupération du top 8 des marques par nombre d'acheteurs (pour le boxplot)
+    # On utilise df_supermarche_full (tous les acheteurs, hors refus)
+    if 'df_supermarche_full' in dir() and not df_supermarche_full.empty:
+        acheteurs_sm_full = df_supermarche_full[df_supermarche_full['Q1'] == 'Oui']
+        if 'statut' in df_supermarche_full.columns:
+            acheteurs_sm_full = acheteurs_sm_full[acheteurs_sm_full['statut'] != 'Refus']
+        top8_brands_prix = acheteurs_sm_full['marque_clean'].value_counts().head(8).index.tolist()
+    else:
+        top8_brands_prix = []
+
+    # -------------------------------------------------------------
     # 1. Tableau des marques : présence et part de marché
-    #    (inclut toutes les marques, même celles uniquement relevées en prix)
     # -------------------------------------------------------------
     st.subheader("📊 Marques : présence et part de marché (enquête supermarché)")
 
-    # --- Marques officielles définies globalement (mapping + prix externes) ---
-    official_brands = get_official_brands()   # retourne un set de marques normalisées
+    official_brands = get_official_brands()
 
-    # --- Marques issues des prix externes ---
+    # Marques issues des prix externes
     marques_prix = pd.DataFrame()
     if not prix_ext.empty:
         marques_prix = prix_ext.groupby('marque_officielle')['supermarche_norm'].apply(set).reset_index()
@@ -5183,7 +5551,7 @@ with tabs[6]:
     else:
         marques_prix = pd.DataFrame(columns=['Marque', 'magasins_prix', 'nb_points_vente_prix'])
 
-    # --- Marques issues des acheteurs (questionnaires) ---
+    # Marques issues des acheteurs (questionnaires)
     acheteurs_sm = df_supermarche[df_supermarche['Q1'] == 'Oui'].copy()
     acheteurs_sm = acheteurs_sm.dropna(subset=['marque_clean'])
 
@@ -5199,10 +5567,8 @@ with tabs[6]:
     else:
         marques_achat = pd.DataFrame(columns=['Marque', 'magasins_achat', 'nb_points_vente_achat', 'Nombre d\'acheteurs'])
 
-    # --- Base de toutes les marques à afficher ---
     toutes_marques = pd.DataFrame({'Marque': list(official_brands)})
 
-    # --- Fusion des deux sources ---
     tab_marques = toutes_marques.merge(
         marques_prix[['Marque', 'magasins_prix', 'nb_points_vente_prix']],
         on='Marque', how='left'
@@ -5211,18 +5577,15 @@ with tabs[6]:
         on='Marque', how='left'
     )
 
-    # Remplacement des NaN par des sets vides pour l'union
     tab_marques['magasins_prix'] = tab_marques['magasins_prix'].apply(lambda x: x if isinstance(x, set) else set())
     tab_marques['magasins_achat'] = tab_marques['magasins_achat'].apply(lambda x: x if isinstance(x, set) else set())
 
-    # Nombre de points de vente total = union des deux sources
     tab_marques['Points de vente'] = tab_marques.apply(
         lambda row: len(row['magasins_prix'] | row['magasins_achat']),
         axis=1
     )
     tab_marques['Points de vente'] = tab_marques['Points de vente'].astype(int)
 
-    # Nombre d'acheteurs et part de marché
     tab_marques['Nombre d\'acheteurs'] = tab_marques['Nombre d\'acheteurs'].fillna(0).astype(int)
     total_acheteurs = tab_marques['Nombre d\'acheteurs'].sum()
     if total_acheteurs > 0:
@@ -5232,13 +5595,11 @@ with tabs[6]:
     else:
         tab_marques['Part de marché (%)'] = None
 
-    # Préparation de l'affichage
     tab_marques_display = tab_marques[['Marque', 'Points de vente', 'Nombre d\'acheteurs', 'Part de marché (%)']].copy()
     tab_marques_display['Part de marché (%)'] = tab_marques_display['Part de marché (%)'].apply(
         lambda x: f"{x:.1f} %" if pd.notna(x) else "N/A"
     )
 
-    # Tri : les marques avec part de marché connue d'abord (décroissant), puis les autres par points de vente décroissant
     tab_marques_display['_sort_pdm'] = tab_marques['Part de marché (%)'].fillna(-1)
     tab_marques_display = tab_marques_display.sort_values(['_sort_pdm', 'Points de vente'], ascending=[False, False])
     tab_marques_display = tab_marques_display.drop(columns=['_sort_pdm'])
@@ -5246,51 +5607,51 @@ with tabs[6]:
     st.dataframe(tab_marques_display, use_container_width=True, hide_index=True)
 
     # -------------------------------------------------------------
-    # 1bis. Graphique des parts de marché des 10 premières marques
+    # 1bis. Graphique des parts de marché des 8 premières marques
     # -------------------------------------------------------------
-    st.subheader("📊 Parts de marché des 10 premières marques")
+    st.subheader("📊 Parts de marché des 8 premières marques")
 
     if not tab_marques.empty:
-        # Classement par part de marché décroissante
-        top10 = tab_marques.nlargest(10, 'Part de marché (%)').copy()
-        # Calcul de la part de marché résiduelle (Autres)
-        pdm_autres = 100.0 - top10['Part de marché (%)'].sum()
+        top8 = tab_marques.nlargest(8, 'Part de marché (%)').copy()
+        pdm_autres = 100.0 - top8['Part de marché (%)'].sum()
         nb_points_vente_autres = tab_marques.loc[
-            ~tab_marques['Marque'].isin(top10['Marque']), 'Points de vente'
+            ~tab_marques['Marque'].isin(top8['Marque']), 'Points de vente'
         ].sum()
 
-        # Construction du DataFrame combiné (10 premières + Autres)
-        top10_display = top10[['Marque', 'Part de marché (%)', 'Points de vente']].copy()
+        top8_display = top8[['Marque', 'Part de marché (%)', 'Points de vente']].copy()
         autres_row = pd.DataFrame([{
             'Marque': 'Autres',
             'Part de marché (%)': pdm_autres,
             'Points de vente': nb_points_vente_autres
         }])
-        df_pie = pd.concat([top10_display, autres_row], ignore_index=True)
+        df_pie = pd.concat([top8_display, autres_row], ignore_index=True)
+
+        # Pour que "Autres" soit en dernier, on trie le DataFrame
+        df_pie['ordre'] = df_pie['Marque'].apply(lambda x: 0 if x != 'Autres' else 1)
+        df_pie = df_pie.sort_values('ordre').drop(columns=['ordre'])
 
         col_pie, col_bar = st.columns(2)
 
         with col_pie:
-            # Camembert des parts de marché
             fig_pie = px.pie(
                 df_pie, values='Part de marché (%)', names='Marque',
-                title='Part de marché (%) – top 10 + Autres',
+                title='Part de marché (%) – top 8 + Autres',
                 color_discrete_sequence=px.colors.qualitative.Set3
             )
-            fig_pie.update_traces(textinfo='percent+label')
+            fig_pie.update_traces(textinfo='percent+label', sort=False)
             fig_pie.update_layout(template="gilroy_export")
             fig_pie = force_black_axes(fig_pie)
             st.plotly_chart(fig_pie, width='stretch')
 
         with col_bar:
-            # Barres horizontales pour les points de vente (tri décroissant)
-            df_bar = top10.sort_values('Points de vente', ascending=True)
+            df_bar = top8.sort_values('Points de vente', ascending=True)
             fig_bar = px.bar(
                 df_bar, x='Points de vente', y='Marque',
                 orientation='h',
-                title='Nombre de points de vente (top 10)',
+                title='Nombre de points de vente (top 8)',
                 text='Points de vente',
                 color='Marque',
+                labels={'Points de vente': 'Points de vente', 'Marque': 'Marque'},
                 color_discrete_sequence=px.colors.qualitative.Set3
             )
             fig_bar.update_traces(textposition='outside')
@@ -5300,6 +5661,54 @@ with tabs[6]:
             st.plotly_chart(fig_bar, width='stretch')
     else:
         st.info("Aucune donnée sur les marques.")
+
+    # -------------------------------------------------------------
+    # NOUVEAU : Taux d'achat par niveau socio-économique
+    # -------------------------------------------------------------
+    st.subheader("📈 Taux d'achat par niveau socio-économique")
+
+    if not df_supermarche_full.empty and not df_sm.empty:
+        # Fusionner les questionnaires avec les infos de supermarché
+        df_q_niveau = df_supermarche_full.copy()
+        df_q_niveau['magasin_norm'] = df_q_niveau['magasin_officiel'].apply(normalize_name)
+        df_sm_niveau = df_sm[['Nom', 'Niveau_socio']].copy()
+        df_sm_niveau['nom_norm'] = df_sm_niveau['Nom'].apply(normalize_name)
+        df_q_niveau = df_q_niveau.merge(df_sm_niveau[['nom_norm', 'Niveau_socio']],
+                                        left_on='magasin_norm', right_on='nom_norm', how='left')
+        # Exclure les refus
+        if 'statut' in df_q_niveau.columns:
+            df_q_niveau = df_q_niveau[df_q_niveau['statut'] != 'Refus']
+
+        # Compter par niveau
+        niveaux = df_q_niveau['Niveau_socio'].dropna().unique()
+        data_taux = []
+        for niveau in niveaux:
+            sub = df_q_niveau[df_q_niveau['Niveau_socio'] == niveau]
+            total = len(sub)
+            acheteurs = sub[sub['Q1'] == 'Oui']
+            nb_ach = len(acheteurs)
+            taux = (nb_ach / total * 100) if total > 0 else 0
+            data_taux.append({
+                'Niveau socio-économique': niveau,
+                'Taux d\'achat (%)': round(taux, 1),
+                'Nombre de questionnaires': total,
+                'Nombre d\'acheteurs': nb_ach
+            })
+        if data_taux:
+            df_taux = pd.DataFrame(data_taux)
+            fig_taux = px.bar(df_taux, x='Niveau socio-économique', y="Taux d'achat (%)",
+                              text="Taux d'achat (%)",
+                              labels={'Taux d\'achat (%)': 'Taux d\'achat (%)'},
+                              title="Taux d'achat par niveau socio-économique")
+            fig_taux.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
+            fig_taux.update_layout(template="gilroy_export")
+            fig_taux = force_black_axes(fig_taux)
+            st.plotly_chart(fig_taux, use_container_width=True)
+            st.caption(f"Basé sur {df_taux['Nombre de questionnaires'].sum()} questionnaires valides hors refus.")
+        else:
+            st.info("Données insuffisantes pour le calcul du taux par niveau.")
+    else:
+        st.info("Données de supermarché ou questionnaires manquantes.")
 
     # -------------------------------------------------------------
     # 2. Marques par chaîne de supermarchés
@@ -5325,25 +5734,21 @@ with tabs[6]:
 
     # -------------------------------------------------------------
     # 3. Comparaison prix enquête terrain vs prix externes
-    #    (section existante conservée)
     # -------------------------------------------------------------
     st.subheader("📈 Comparaison des prix relevés sur le terrain vs prix affichés")
     if not df_p_f.empty and not prix_ext.empty:
-        # Fusion des deux sources sur le supermarché et le conditionnement (approximatif)
         df_p_f['volume_L'] = df_p_f['data_dict'].apply(lambda d: extraire_litres(d.get('Conditionnement', '')) if isinstance(d, dict) else None)
         df_p_f = df_p_f.dropna(subset=['volume_L'])
         df_p_f['prix_unitaire_FC'] = pd.to_numeric(df_p_f['data_dict'].apply(lambda d: d.get('Prix', 0)), errors='coerce') / df_p_f['volume_L']
         df_p_f['marque_officielle'] = apply_brand_mapping_strict(df_p_f['data_dict'].apply(lambda d: d.get('Marque', '') if isinstance(d, dict) else ''))
         df_p_f = df_p_f.dropna(subset=['marque_officielle'])
 
-        # Pour chaque supermarché, on compare le prix au litre terrain vs externe
         comp_list = []
         for sm in selected_mags if selected_mags else df_p_f['supermarche'].unique():
             terrain = df_p_f[df_p_f['supermarche'] == sm]
             externe = prix_ext[prix_ext['supermarche'] == sm]
             if terrain.empty or externe.empty:
                 continue
-            # Moyenne par marque et conditionnement
             terrain_agg = terrain.groupby(['marque_officielle', 'volume_L'])['prix_unitaire_FC'].mean().reset_index()
             externe_agg = externe.groupby(['marque_officielle', 'volume_L'])['prix_unitaire_FC'].mean().reset_index()
             merged = terrain_agg.merge(externe_agg, on=['marque_officielle', 'volume_L'], suffixes=('_terrain', '_externe'))
@@ -5357,6 +5762,8 @@ with tabs[6]:
 
             fig_comp = px.scatter(df_comp, x='prix_unitaire_FC_externe', y='prix_unitaire_FC_terrain',
                                   hover_data=['supermarche', 'marque_officielle', 'volume_L'],
+                                  labels={'prix_unitaire_FC_externe': 'Prix affiché (FC/L)',
+                                          'prix_unitaire_FC_terrain': 'Prix terrain (FC/L)'},
                                   title="Prix terrain vs prix affiché (FC/L)")
             fig_comp.add_shape(type='line', x0=0, y0=0, x1=df_comp['prix_unitaire_FC_externe'].max(),
                                y1=df_comp['prix_unitaire_FC_externe'].max(), line=dict(dash='dash'))
@@ -5369,12 +5776,10 @@ with tabs[6]:
         st.info("Données de prix terrain ou prix externes insuffisantes pour la comparaison.")
 
     # -------------------------------------------------------------
-    # 4. Distribution des prix par marque (boxplot)
-    #    (section existante conservée)
+    # 4. Distribution des prix par marque (boxplot) – TOP 8 marques
     # -------------------------------------------------------------
-    st.subheader(f"📦 Prix au litre par marque ({devise})")
-    if not prix_ext.empty:
-        # ---- Sélecteur de contenant ----
+    st.subheader(f"📦 Prix au litre par marque ({devise}) – top 8")
+    if not prix_ext.empty and top8_brands_prix:
         contenants_dispo = ['Tous'] + sorted(prix_ext['conditionnement'].unique().tolist())
         contenant_choisi = st.selectbox(
             "Filtrer par contenant",
@@ -5382,7 +5787,6 @@ with tabs[6]:
             key="box_marque_contenant"
         )
 
-        # Filtrage des données
         if contenant_choisi != 'Tous':
             df_prix_marque = prix_ext[prix_ext['conditionnement'] == contenant_choisi]
             titre_graph = f"Distribution des prix au litre par marque – {contenant_choisi} ({devise})"
@@ -5391,15 +5795,16 @@ with tabs[6]:
             titre_graph = f"Distribution des prix au litre par marque – Tous contenants ({devise})"
 
         if not df_prix_marque.empty:
+            df_prix_marque_top8 = df_prix_marque[df_prix_marque['marque_officielle'].isin(top8_brands_prix)]
+            if df_prix_marque_top8.empty:
+                # Fallback : toutes les marques
+                df_prix_marque_top8 = df_prix_marque
             fig_marque = px.box(
-                df_prix_marque,
+                df_prix_marque_top8,
                 x='marque_officielle',
                 y='prix_unitaire_conv',
-                title=titre_graph,
-                labels={
-                    'marque_officielle': 'Marque',
-                    'prix_unitaire_conv': f'Prix au litre ({devise})'
-                }
+                labels={'marque_officielle': 'Marque', 'prix_unitaire_conv': f'Prix au litre ({devise})'},
+                title=titre_graph + " (top 8 marques les plus achetées)"
             )
             fig_marque.update_layout(xaxis_tickangle=-45, template="gilroy_export")
             fig_marque = force_black_axes(fig_marque)
@@ -5408,19 +5813,18 @@ with tabs[6]:
             else:
                 fig_marque.update_yaxes(tickformat=",.2f")
             st.plotly_chart(fig_marque, width='stretch')
+            st.caption(f"Basé sur {len(df_prix_marque_top8)} relevés de prix pour les marques du top 8.")
         else:
             st.info("Aucune donnée pour ce contenant.")
     else:
-        st.info("Aucune donnée de prix externe.")
+        st.info("Aucune donnée de prix externe ou top 8 non disponible.")
 
     # -------------------------------------------------------------
     # 5. Prix au litre selon le conditionnement (boxplots)
-    #    (nouvelle version, remplace l'ancien histogramme si existant)
     # -------------------------------------------------------------
     st.subheader(f"💵 Prix au litre selon le conditionnement ({devise})")
     if not prix_ext.empty:
         data_box = prix_ext.copy()
-        # Regrouper les conditionnements par volume
         data_box['Cond. (L)'] = data_box['volume_L'].apply(lambda v: f"{v:.1f} L" if v == int(v) else f"{v:.2f} L")
         order = sorted(data_box['volume_L'].unique())
         order_labels = [f"{v:.1f} L" if v == int(v) else f"{v:.2f} L" for v in order]
@@ -5446,7 +5850,7 @@ with tabs[6]:
         st.info("Pas assez de données pour les boxplots.")
 
     # -------------------------------------------------------------
-    # 6. Tableau des prix par supermarché (existant conservé)
+    # 6. Tableau des prix par supermarché
     # -------------------------------------------------------------
     st.subheader("🏪 Prix au litre par supermarché")
     if not prix_ext.empty:
@@ -5467,7 +5871,7 @@ with tabs[6]:
         st.download_button("📥 Télécharger les prix externes (CSV)", csv, "prix_externes.csv", "text/csv")
 
 # ------------------------------------------------------------
-# ONGLET 7 : PROFIL SUPERMARCHÉS (corrigé)
+# ONGLET 7 : PROFIL SUPERMARCHÉS 
 # ------------------------------------------------------------
 with tabs[7]:
     st.header("🏪 Profil des supermarchés recensés")
@@ -5477,87 +5881,132 @@ with tabs[7]:
         df_sm = df_sm.copy()
         total = len(df_sm)
         st.metric("Nombre total de supermarchés", total)
+
         col1, col2 = st.columns(2)
         with col1:
             st.subheader("Répartition par taille")
-            taille_counts = df_sm['Taille'].value_counts().reset_index()
-            taille_counts.columns = ['Taille', 'Nombre']
-            fig_taille = px.pie(taille_counts, values='Nombre', names='Taille')
+            taille_counts = df_sm['Taille'].value_counts()
+            taille_pct = taille_counts / taille_counts.sum() * 100
+            taille_df = taille_pct.reset_index()
+            taille_df.columns = ['Taille', 'Pourcentage']
+            fig_taille = px.pie(taille_df, values='Pourcentage', names='Taille',
+                                title="Répartition par taille")
+            fig_taille.update_traces(textinfo='percent+label')
             fig_taille.update_layout(template="gilroy_export")
             fig_taille = force_black_axes(fig_taille)
             st.plotly_chart(fig_taille, width='stretch')
+            st.caption(f"Basé sur {total} supermarchés. Les pourcentages sont calculés sur l'ensemble des supermarchés.")
+
         with col2:
             st.subheader("Répartition par niveau socio-économique")
-            socio_counts = df_sm['Niveau_socio'].value_counts().reset_index()
-            socio_counts.columns = ['Niveau socio-économique', 'Nombre']
-            fig_socio = px.pie(socio_counts, values='Nombre', names='Niveau socio-économique')
+            socio_counts = df_sm['Niveau_socio'].value_counts()
+            socio_pct = socio_counts / socio_counts.sum() * 100
+            socio_df = socio_pct.reset_index()
+            socio_df.columns = ['Niveau socio-économique', 'Pourcentage']
+            fig_socio = px.pie(socio_df, values='Pourcentage', names='Niveau socio-économique',
+                               title="Répartition par niveau socio-économique")
+            fig_socio.update_traces(textinfo='percent+label')
             fig_socio.update_layout(template="gilroy_export")
             fig_socio = force_black_axes(fig_socio)
             st.plotly_chart(fig_socio, width='stretch')
+            st.caption(f"Basé sur {total} supermarchés. Les pourcentages sont calculés sur l'ensemble des supermarchés.")
+
         st.subheader("Croisement Taille × Niveau socio-économique")
         cross_taille_socio = pd.crosstab(df_sm['Taille'], df_sm['Niveau_socio'])
         st.dataframe(cross_taille_socio)
+
         price_cols = [c for c in df_sm.columns if ' - ' in c and any(u in c.lower() for u in ['l', 'litre'])]
         df_sm['Presence_huile'] = (df_sm[price_cols] > 0).any(axis=1)
         df_sm['Presence_huile_label'] = df_sm['Presence_huile'].map({True: 'Oui', False: 'Non'})
+
         st.subheader("Présence d'huile")
         col_a, col_b = st.columns(2)
         with col_a:
             st.write("Par niveau socio-économique")
             cross_presence_socio = pd.crosstab(df_sm['Niveau_socio'], df_sm['Presence_huile_label'])
             st.dataframe(cross_presence_socio)
-            fig_pres_socio = px.histogram(df_sm, x='Niveau_socio', color='Presence_huile_label',
-                                          barmode='group', labels={'Presence_huile_label': 'Huile présente'},
-                                          title="Présence d'huile par niveau socio-économique")
-            fig_pres_socio.update_xaxes(title_text="Niveau socio-économique")
-            fig_pres_socio.update_yaxes(title_text="Nombre de supermarchés")
+
+            # Histogramme avec pourcentages
+            pres_socio = df_sm.groupby(['Niveau_socio', 'Presence_huile_label']).size().reset_index(name='count')
+            pres_socio['pct'] = pres_socio.groupby('Niveau_socio')['count'].transform(lambda x: x / x.sum() * 100)
+            fig_pres_socio = px.bar(pres_socio, x='Niveau_socio', y='pct', color='Presence_huile_label',
+                                    barmode='group',
+                                    labels={'Niveau_socio': 'Niveau socio-économique',
+                                            'pct': 'Pourcentage (%)',
+                                            'Presence_huile_label': 'Huile présente'},
+                                    title="Présence d'huile par niveau socio-économique")
+            fig_pres_socio.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
             fig_pres_socio.update_layout(template="gilroy_export")
             fig_pres_socio = force_black_axes(fig_pres_socio)
             st.plotly_chart(fig_pres_socio, width='stretch')
+            st.caption(f"Basé sur {total} supermarchés. Les pourcentages sont calculés par niveau.")
+
         with col_b:
             st.write("Par taille")
             cross_presence_taille = pd.crosstab(df_sm['Taille'], df_sm['Presence_huile_label'])
             st.dataframe(cross_presence_taille)
-            fig_pres_taille = px.histogram(df_sm, x='Taille', color='Presence_huile_label',
-                                           barmode='group', labels={'Presence_huile_label': 'Huile présente'},
-                                           title="Présence d'huile par taille")
-            fig_pres_taille.update_xaxes(title_text="Taille du supermarché")
-            fig_pres_taille.update_yaxes(title_text="Nombre de supermarchés")
+
+            pres_taille = df_sm.groupby(['Taille', 'Presence_huile_label']).size().reset_index(name='count')
+            pres_taille['pct'] = pres_taille.groupby('Taille')['count'].transform(lambda x: x / x.sum() * 100)
+            fig_pres_taille = px.bar(pres_taille, x='Taille', y='pct', color='Presence_huile_label',
+                                     barmode='group',
+                                     labels={'Taille': 'Taille du supermarché',
+                                             'pct': 'Pourcentage (%)',
+                                             'Presence_huile_label': 'Huile présente'},
+                                     title="Présence d'huile par taille")
+            fig_pres_taille.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
             fig_pres_taille.update_layout(template="gilroy_export")
             fig_pres_taille = force_black_axes(fig_pres_taille)
             st.plotly_chart(fig_pres_taille, width='stretch')
+            st.caption(f"Basé sur {total} supermarchés. Les pourcentages sont calculés par taille.")
+
         st.subheader("Nombre de supermarchés par chaîne")
         if 'Chaine' in df_sm.columns:
             chaine_counts = df_sm['Chaine'].value_counts().reset_index()
             chaine_counts.columns = ['Chaîne', 'Nombre']
             chaine_counts = chaine_counts.sort_values('Nombre', ascending=True)
+            # Calcul des pourcentages
+            total_chaines = chaine_counts['Nombre'].sum()
+            chaine_counts['Pourcentage'] = (chaine_counts['Nombre'] / total_chaines * 100).round(1)
 
             fig_chaine = px.bar(
                 chaine_counts, x='Nombre', y='Chaîne',
                 orientation='h',
                 title='Magasins par chaîne',
-                text='Nombre',
+                text='Pourcentage',
                 color='Chaîne',
-                color_discrete_sequence=px.colors.qualitative.Dark24
+                color_discrete_sequence=px.colors.qualitative.Dark24,
+                labels={'Nombre': 'Nombre de magasins', 'Chaîne': 'Chaîne', 'Pourcentage': '%'}
             )
-            fig_chaine.update_traces(textposition='outside')
+            fig_chaine.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
             fig_chaine.update_layout(xaxis_title='Nombre de magasins', yaxis_title=None, showlegend=False,
                                      template="gilroy_export")
             fig_chaine = force_black_axes(fig_chaine)
             st.plotly_chart(fig_chaine, width='stretch')
+            st.caption(f"Basé sur {total_chaines} supermarchés ayant une chaîne renseignée.")
         else:
             st.info("La colonne 'Chaine' n'est pas présente dans le fichier supermarchés.")
-        
+
         st.subheader("Répartition par secteur")
         secteur_counts = df_sm['Secteur'].value_counts().reset_index()
         secteur_counts.columns = ['Secteur', 'Nombre']
-        fig_secteur = px.bar(secteur_counts, x='Secteur', y='Nombre')
+        secteur_counts['Pourcentage'] = (secteur_counts['Nombre'] / secteur_counts['Nombre'].sum() * 100).round(1)
+        fig_secteur = px.bar(
+            secteur_counts, x='Secteur', y='Pourcentage',
+            labels={'Secteur': 'Secteur', 'Pourcentage': 'Pourcentage des supermarchés (%)'},
+            title="Répartition par secteur",
+            text='Pourcentage'
+        )
+        fig_secteur.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
         fig_secteur.update_layout(template="gilroy_export")
         fig_secteur = force_black_axes(fig_secteur)
         st.plotly_chart(fig_secteur, width='stretch')
+        st.caption(f"Basé sur {total} supermarchés.")
+
         st.subheader("Croisement Secteur × Taille")
         cross_secteur_taille = pd.crosstab(df_sm['Secteur'], df_sm['Taille'])
         st.dataframe(cross_secteur_taille)
+
         st.subheader("Horaires d'ouverture")
         try:
             df_sm['h_ouv_sem'] = df_sm['ouv_sem'].apply(lambda x: parse_time(x).hour + parse_time(x).minute/60 if parse_time(x) else None)
@@ -5565,16 +6014,33 @@ with tabs[7]:
             df_sm['duree_sem'] = df_sm['h_ferm_sem'] - df_sm['h_ouv_sem']
             if df_sm['duree_sem'].notna().any():
                 st.write(f"Durée d'ouverture moyenne en semaine : {df_sm['duree_sem'].mean():.1f} h")
-                fig_ouv = px.histogram(df_sm, x='h_ouv_sem', nbins=24, title="Heure d'ouverture semaine")
+
+                # Histogramme en pourcentage
+                ouv_counts = df_sm['h_ouv_sem'].dropna()
+                ouv_pct = ouv_counts.value_counts(normalize=True) * 100
+                ouv_df = ouv_pct.reset_index()
+                ouv_df.columns = ['Heure', 'Pourcentage']
+                ouv_df = ouv_df.sort_values('Heure')
+                fig_ouv = px.bar(ouv_df, x='Heure', y='Pourcentage',
+                                 labels={'Heure': "Heure d'ouverture", 'Pourcentage': 'Pourcentage des supermarchés (%)'},
+                                 title="Heure d'ouverture en semaine")
+                fig_ouv.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
                 fig_ouv.update_layout(template="gilroy_export")
                 fig_ouv = force_black_axes(fig_ouv)
                 st.plotly_chart(fig_ouv, width='stretch')
+                st.caption(f"Basé sur {len(ouv_counts)} supermarchés ayant une heure d'ouverture renseignée.")
+
                 duree_secteur = df_sm.groupby('Secteur')['duree_sem'].mean().round(1).reset_index()
-                fig_duree = px.bar(duree_secteur, x='Secteur', y='duree_sem', title="Durée moyenne d'ouverture (heures) par secteur")
+                fig_duree = px.bar(
+                    duree_secteur, x='Secteur', y='duree_sem',
+                    labels={'Secteur': 'Secteur', 'duree_sem': 'Durée moyenne (h)'},
+                    title="Durée moyenne d'ouverture (heures) par secteur"
+                )
                 fig_duree.update_layout(template="gilroy_export")
                 fig_duree = force_black_axes(fig_duree)
                 st.plotly_chart(fig_duree, width='stretch')
-        except:
+                st.caption(f"Basé sur les supermarchés ayant des horaires complets.")
+        except Exception:
             st.info("Horaires non exploitables.")
 
 # ------------------------------------------------------------
@@ -5926,9 +6392,8 @@ with tabs[8]:
         st.info("Aucune anomalie à afficher.")
 
 # ------------------------------------------------------------
-# ONGLET 9 : CARTE DES SUPERMARCHÉS ET MESURES (inchangé, pas de figures Plotly)
+# ONGLET 9 : CARTE DES SUPERMARCHÉS ET MESURES
 # ------------------------------------------------------------
-# (le code existant de l'onglet 9 est déjà fourni sans figures Plotly, on le laisse tel quel)
 with tabs[9]:
     st.header("🗺️ Cartographie des supermarchés et des mesures GPS")
 
@@ -6004,8 +6469,402 @@ with tabs[9]:
         st.warning("Aucune mesure GPS dans la période sélectionnée.")
         st.stop()
 
-    # ... (le reste de l'onglet 9 identique à l'original, inchangé)
-    # (Je ne le recopie pas pour éviter la duplication, il n'y a pas de figures Plotly à modifier)
+    # ----- Mesures liées à un supermarché (hors ménages) -----
+    mag_meas = df_meas[~df_meas['magasin'].str.startswith('Ménage')].copy()
+    mag_meas['magasin_norm'] = mag_meas['magasin'].apply(normalize_name)
+
+    # ----- Positions médianes par magasin -----
+    median_pos = mag_meas.groupby('magasin_norm').agg(
+        lat_med=('lat', 'median'),
+        lon_med=('lon', 'median'),
+        nb_mesures=('lat', 'count')
+    ).reset_index()
+
+    if not df_sm.empty:
+        nom_map = dict(zip(df_sm['nom_norm'], df_sm['Nom']))
+        median_pos['Nom officiel'] = median_pos['magasin_norm'].map(nom_map).fillna(median_pos['magasin_norm'])
+    else:
+        median_pos['Nom officiel'] = median_pos['magasin_norm']
+
+    # ----- Positions manuelles -----
+    manual = load_manual_positions()
+    def get_final_lat(row):
+        key = row['Nom officiel']
+        if key in manual and 'lat' in manual[key]:
+            return manual[key]['lat']
+        return row['lat_med']
+    def get_final_lon(row):
+        key = row['Nom officiel']
+        if key in manual and 'lon' in manual[key]:
+            return manual[key]['lon']
+        return row['lon_med']
+    median_pos['lat_final'] = median_pos.apply(get_final_lat, axis=1)
+    median_pos['lon_final'] = median_pos.apply(get_final_lon, axis=1)
+    median_pos['manuel'] = median_pos['Nom officiel'].apply(lambda x: x in manual)
+
+    # ----- Section 1 : Tableau et anomalies (inchangé) -----
+    st.subheader("📋 Coordonnées médianes des magasins sélectionnés")
+    mags_selected = st.session_state.get('selected_magasins', [])
+    if not mags_selected:
+        st.info("Aucun magasin sélectionné (onglet Accueil).")
+        st.stop()
+
+    selected_norm = {normalize_name(m): m for m in mags_selected}
+    median_pos_sel = median_pos[median_pos['magasin_norm'].isin(selected_norm.keys())].copy()
+    if median_pos_sel.empty:
+        st.info("Aucun magasin sélectionné ne possède de mesure GPS.")
+        st.stop()
+
+    display_df = median_pos_sel[['Nom officiel', 'lat_final', 'lon_final', 'nb_mesures']].copy()
+    display_df.columns = ['Magasin', 'Latitude médiane', 'Longitude médiane', 'Nb mesures']
+    st.dataframe(display_df, use_container_width=True)
+
+    # Détection des mesures anormales (écart > 150 m)
+    seuil_anomalie_m = 150
+    anomalies = []
+    for _, store_row in median_pos_sel.iterrows():
+        store_norm = store_row['magasin_norm']
+        store_lat = store_row['lat_med']
+        store_lon = store_row['lon_med']
+        store_meas = mag_meas[mag_meas['magasin_norm'] == store_norm]
+        for _, m_row in store_meas.iterrows():
+            dist = haversine(m_row['lat'], m_row['lon'], store_lat, store_lon)
+            if dist > seuil_anomalie_m / 1000.0:
+                anomalies.append({
+                    'Magasin': store_row['Nom officiel'],
+                    'Date': m_row['date'].strftime('%Y-%m-%d %H:%M') if pd.notna(m_row['date']) else '',
+                    'Type': m_row['type'],
+                    'Distance (m)': int(dist * 1000),
+                    'UUID': m_row.get('uuid', ''),
+                    'Enquêteur': m_row.get('enqueteur', '')
+                })
+    if anomalies:
+        st.warning(f"{len(anomalies)} mesure(s) anormale(s) détectée(s) (écart > {seuil_anomalie_m} m de la médiane du magasin).")
+        with st.expander("🔍 Voir les mesures anormales"):
+            st.dataframe(pd.DataFrame(anomalies), use_container_width=True)
+    else:
+        st.success("Aucune mesure anormale détectée parmi les magasins sélectionnés.")
+
+    # ----- Barre latérale des options de la carte -----
+    with st.sidebar:
+        st.subheader("📊 Options carte")
+        show_mesures = st.checkbox("Afficher les mesures individuelles", value=False)
+        show_menages = st.checkbox("Inclure les questionnaires ménage", value=False)
+        use_cluster = st.checkbox("Regrouper les mesures (clusters)", value=True, disabled=not show_mesures)
+        if show_mesures:
+            types_dispo = ['Tous'] + list(df_meas['type'].unique())
+            type_sel = st.selectbox("Type de mesure à afficher", types_dispo)
+        else:
+            type_sel = 'Tous'
+
+    df_meas_filtered = df_meas.copy()
+    if not show_menages:
+        df_meas_filtered = df_meas_filtered[df_meas_filtered['type'] != 'Questionnaire ménage']
+    if show_mesures and type_sel != 'Tous':
+        df_meas_filtered = df_meas_filtered[df_meas_filtered['type'] == type_sel]
+
+    # ----- Couleurs (palette foncée) -----
+    if not df_sm.empty:
+        df_sm_copy = df_sm.copy()
+        df_sm_copy['Segment'] = df_sm_copy['Taille'].fillna('?') + ' / ' + df_sm_copy['Niveau_socio'].fillna('?')
+        segments_uniques = sorted(df_sm_copy['Segment'].unique())
+        from plotly.express import colors as px_colors
+        dark_palette = px_colors.qualitative.Dark24
+        seg_color_map = {seg: dark_palette[i % len(dark_palette)] for i, seg in enumerate(segments_uniques)}
+    else:
+        df_sm_copy = pd.DataFrame()
+        seg_color_map = {'Inconnu': '#1f77b4'}
+
+    # ----- Création de la carte (avec échelle) -----
+    center_lat = median_pos_sel['lat_final'].mean()
+    center_lon = median_pos_sel['lon_final'].mean()
+    m = folium.Map(location=[center_lat, center_lon], zoom_start=13,
+                   tiles='OpenStreetMap', control_scale=True)
+
+    # ----- Flèche nord (boussole) -----
+    north_arrow_html = '''
+    <div style="position: absolute; bottom: 10px; left: 10px; width: 40px; height: 40px; z-index: 1000;">
+        <svg viewBox="0 0 40 40">
+            <polygon points="20,0 0,40 40,40" fill="#cc0000" />
+            <text x="20" y="34" text-anchor="middle" font-size="11" fill="white" font-weight="bold">N</text>
+        </svg>
+    </div>
+    '''
+    m.get_root().html.add_child(folium.Element(north_arrow_html))
+
+    # ----- Affichage des supermarchés (cercles non remplis) -----
+    for _, row in median_pos_sel.iterrows():
+        nom_off = row['Nom officiel']
+        match = df_sm_copy[df_sm_copy['Nom'] == nom_off]
+        segment = match['Segment'].iloc[0] if not match.empty else 'Inconnu'
+        couleur = seg_color_map.get(segment, 'gray')
+
+        popup_text = f"""
+        <b>{row['Nom officiel']}</b><br>
+        Segment : {segment}<br>
+        Nb mesures : {row['nb_mesures']}<br>
+        Position : {row['lat_final']:.6f}, {row['lon_final']:.6f}<br>
+        {'<i>(corrigée manuellement)</i>' if row['manuel'] else '(médiane)'}
+        """
+        folium.CircleMarker(
+            location=[row['lat_final'], row['lon_final']],
+            radius=6,
+            popup=folium.Popup(popup_text, max_width=250),
+            tooltip=row['Nom officiel'],
+            color=couleur,
+            fill=False,
+            weight=3,
+            opacity=0.9
+        ).add_to(m)
+
+    # ----- Mesures individuelles (si demandé) -----
+    if show_mesures and not df_meas_filtered.empty:
+        if use_cluster:
+            cluster = MarkerCluster().add_to(m)
+        for _, row in df_meas_filtered.iterrows():
+            if row['type'] == 'Questionnaire SM':
+                couleur = 'green'
+            elif row['type'] == 'Questionnaire ménage':
+                couleur = 'orange'
+            else:
+                couleur = 'red'
+            popup = f"{row['type']}<br>{row['magasin']}<br>{row['date'].strftime('%Y-%m-%d %H:%M') if pd.notna(row['date']) else ''}"
+            folium.CircleMarker(
+                location=[row['lat'], row['lon']],
+                radius=3,
+                popup=popup,
+                color=couleur,
+                fill=True,
+                fill_opacity=0.7,
+                weight=1
+            ).add_to(cluster if use_cluster else m)
+
+    # ----- Affichage de la carte -----
+    st_folium(m, width=900, height=600)
+
+    # ----- Légende sous la carte (affichage Streamlit) -----
+    st.subheader("Légende")
+    segments_presents = sorted(median_pos_sel['Nom officiel'].apply(
+        lambda x: df_sm_copy[df_sm_copy['Nom'] == x]['Segment'].iloc[0] if not df_sm_copy[df_sm_copy['Nom'] == x].empty else 'Inconnu'
+    ).unique())
+
+    legend_display = '<div style="display:flex; flex-wrap:wrap; gap:15px; align-items:center; font-size:14px;">'
+    legend_display += '<b>Supermarchés (segment) :</b>'
+    for seg in segments_presents:
+        color = seg_color_map.get(seg, 'gray')
+        legend_display += f'<span style="display:inline-block; margin-left:10px;"><span style="display:inline-block; width:12px; height:12px; border:3px solid {color}; border-radius:50%; margin-right:4px; vertical-align:middle;"></span>{seg}</span>'
+    if show_mesures:
+        legend_display += '<br><b>Mesures :</b>'
+        legend_display += '<span style="display:inline-block; margin-left:10px;"><span style="display:inline-block; width:12px; height:12px; background-color:green; border-radius:50%; margin-right:4px; vertical-align:middle;"></span>Questionnaire SM</span>'
+        legend_display += '<span style="display:inline-block; margin-left:10px;"><span style="display:inline-block; width:12px; height:12px; background-color:red; border-radius:50%; margin-right:4px; vertical-align:middle;"></span>Comptage</span>'
+        if show_menages:
+            legend_display += '<span style="display:inline-block; margin-left:10px;"><span style="display:inline-block; width:12px; height:12px; background-color:orange; border-radius:50%; margin-right:4px; vertical-align:middle;"></span>Ménage</span>'
+    legend_display += '</div>'
+    st.markdown(legend_display, unsafe_allow_html=True)
+
+    # ----- Export HTML (carte + légende) -----
+    map_html = m.get_root().render()
+    legend_export = '<div style="margin-top:10px; font-family:Arial; font-size:14px;">'
+    legend_export += '<b>Légende</b><br/>'
+    legend_export += 'Supermarchés (segment) :<br/>'
+    for seg in segments_presents:
+        color = seg_color_map.get(seg, 'gray')
+        legend_export += f'<span style="display:inline-block; margin-right:10px;"><span style="display:inline-block; width:12px; height:12px; border:3px solid {color}; border-radius:50%; margin-right:4px; vertical-align:middle;"></span>{seg}</span><br/>'
+    if show_mesures:
+        legend_export += '<br/>Mesures :<br/>'
+        legend_export += '<span style="display:inline-block; margin-right:10px;"><span style="display:inline-block; width:12px; height:12px; background-color:green; border-radius:50%; margin-right:4px; vertical-align:middle;"></span>Questionnaire SM</span><br/>'
+        legend_export += '<span style="display:inline-block; margin-right:10px;"><span style="display:inline-block; width:12px; height:12px; background-color:red; border-radius:50%; margin-right:4px; vertical-align:middle;"></span>Comptage</span><br/>'
+        if show_menages:
+            legend_export += '<span style="display:inline-block; margin-right:10px;"><span style="display:inline-block; width:12px; height:12px; background-color:orange; border-radius:50%; margin-right:4px; vertical-align:middle;"></span>Ménage</span><br/>'
+    legend_export += '</div>'
+    full_html = map_html.replace('</body>', legend_export + '</body>')
+
+    st.download_button(
+        label="📥 Télécharger la carte (HTML)",
+        data=full_html,
+        file_name="carte_supermarches.html",
+        mime="text/html",
+    )
+
+    # ============================================================
+    # NOUVELLE SECTION : ANALYSE SPATIALE DES INDICATEURS (avec cache)
+    # ============================================================
+    st.divider()
+    st.subheader("📍 Analyse spatiale des indicateurs par magasin")
+
+    if not mags_selected:
+        st.info("Aucun magasin sélectionné.")
+    else:
+        # Coordonnées finales (déjà dans median_pos_sel)
+        coord_map = {}
+        for _, row in median_pos_sel.iterrows():
+            coord_map[row['Nom officiel']] = (row['lat_final'], row['lon_final'])
+
+        # ----- Fonction de calcul des métriques (version avec paramètres) -----
+        def compute_store_metrics(mag, df_c_f, df_supermarche_full, df_sm, df_profils_pivot):
+            """Retourne fréquentation, taux d'achat, volume annuel pour un magasin."""
+            comptages = df_c_f[df_c_f['lieu_officiel'] == mag].copy()
+            if comptages.empty:
+                return {'frequentation': None, 'ti': None, 'qi': None, 'volume_annuel': None}
+
+            # Récupération des facteurs k (simplifiée)
+            jour_map = {'Mon': 'Mo', 'Tue': 'Tu', 'Wed': 'We', 'Thu': 'Th', 'Fri': 'Fr', 'Sat': 'Sa', 'Sun': 'Su'}
+            k_sem_list, k_we_list = [], []
+            for _, row in comptages.iterrows():
+                date_obj = row['date_dt']
+                jour_code = date_obj.strftime('%a')
+                jour_google = jour_map.get(jour_code, jour_code)
+                # Profil simplifié (uniforme si pas de données Google)
+                profil = [1.0]*24  # Simplification pour l'analyse spatiale
+                debut, fin = row['debut_dt'], row['fin_dt']
+                duree = (fin - debut).total_seconds() / 3600.0
+                if duree <= 0:
+                    continue
+                start_min = debut.hour * 60 + debut.minute
+                end_min = fin.hour * 60 + fin.minute
+                current = start_min
+                G_moy = 0.0
+                while current < end_min:
+                    h = current // 60
+                    next_min = min((h+1)*60, end_min)
+                    frac = (next_min - current) / 60.0
+                    G_moy += profil[h] * frac
+                    current = next_min
+                G_moy = G_moy / duree if duree > 0 else 0
+                if G_moy <= 0:
+                    continue
+                flux_reel = row['total'] / duree
+                k = flux_reel / G_moy
+                if date_obj.weekday() >= 5:
+                    k_we_list.append(k)
+                else:
+                    k_sem_list.append(k)
+
+            k_sem = np.median(k_sem_list) if k_sem_list else None
+            k_we  = np.median(k_we_list) if k_we_list else None
+            if k_sem is None and k_we is not None: k_sem = k_we
+            if k_we is None and k_sem is not None: k_we = k_sem
+            if k_sem is None or k_we is None:
+                return {'frequentation': None, 'ti': None, 'qi': None, 'volume_annuel': None}
+
+            # Flux hebdomadaire simplifié (heures d'ouverture 8h-18h)
+            heures_sem = list(range(8, 18))
+            heures_we = list(range(8, 18))
+            clients_sem = [k_sem * 1.0 for _ in heures_sem]
+            clients_we  = [k_we * 1.0 for _ in heures_we]
+            freq_hebdo = 5 * sum(clients_sem) + 2 * sum(clients_we)
+
+            # Questionnaires supermarché
+            df_sm_q = df_supermarche_full[df_supermarche_full['magasin_officiel'] == mag]
+            total_q = len(df_sm_q[df_sm_q['statut'] != 'Refus']) if 'statut' in df_sm_q.columns else len(df_sm_q)
+            acheteurs = df_sm_q[(df_sm_q['Q1'] == 'Oui') & (df_sm_q['statut'] != 'Refus')] if 'statut' in df_sm_q.columns else df_sm_q[df_sm_q['Q1'] == 'Oui']
+            nb_ach = len(acheteurs)
+            ti = nb_ach / total_q if total_q > 0 else 0.0
+            qi = acheteurs['vol_litres'].mean() if nb_ach > 0 else 0.0
+            vol_annuel = freq_hebdo * ti * qi * 52 if (ti is not None and qi is not None) else None
+
+            return {
+                'frequentation': freq_hebdo,
+                'ti': ti,
+                'qi': qi,
+                'volume_annuel': vol_annuel
+            }
+
+        # ----- Version cachable de la fonction -----
+        @st.cache_data(show_spinner=False)
+        def compute_store_metrics_cached(mag, df_c_f, df_supermarche_full, df_sm, df_profils_pivot):
+            return compute_store_metrics(mag, df_c_f, df_supermarche_full, df_sm, df_profils_pivot)
+
+        # ----- Calcul des métriques pour tous les magasins -----
+        store_metrics = {}
+        for mag in mags_selected:
+            if mag in coord_map:
+                store_metrics[mag] = compute_store_metrics_cached(
+                    mag, df_c_f, df_supermarche_full, df_sm, df_profils_pivot
+                )
+
+        # ----- Sélecteur d'indicateur -----
+        indicateurs = {
+            'Fréquentation hebdomadaire (clients)': 'frequentation',
+            'Taux d\'achat (%)': 'ti',
+            'Volume annuel estimé (L)': 'volume_annuel'
+        }
+        choix_indicateur = st.selectbox("Indicateur à afficher sur la carte", list(indicateurs.keys()))
+        champ = indicateurs[choix_indicateur]
+
+        if store_metrics:
+            # Créer une nouvelle carte centrée sur la moyenne des magasins
+            lats = [coord_map[m][0] for m in store_metrics.keys() if m in coord_map]
+            lons = [coord_map[m][1] for m in store_metrics.keys() if m in coord_map]
+            if not lats:
+                st.warning("Aucune coordonnée disponible pour les magasins sélectionnés.")
+            else:
+                center_lat = np.mean(lats)
+                center_lon = np.mean(lons)
+                m2 = folium.Map(location=[center_lat, center_lon], zoom_start=13, tiles='OpenStreetMap', control_scale=True)
+
+                # Préparer les données pour la colormap
+                valeurs = []
+                mags_valides = []
+                for mag, metric in store_metrics.items():
+                    val = metric[champ]
+                    if val is not None and not np.isnan(val) and mag in coord_map:
+                        valeurs.append(val)
+                        mags_valides.append(mag)
+                if valeurs:
+                    vmin, vmax = min(valeurs), max(valeurs)
+                    if vmax == vmin:
+                        vmax += 1
+                    colormap = branca.colormap.linear.YlOrRd_09.scale(vmin, vmax)
+
+                    for mag in mags_valides:
+                        val = store_metrics[mag][champ]
+                        color = colormap(val)
+                        popup_text = f"<b>{mag}</b><br>{choix_indicateur} : {fmt_nombre(val, 2)}"
+                        folium.CircleMarker(
+                            location=coord_map[mag],
+                            radius=8,
+                            color=color,
+                            fill=True,
+                            fill_opacity=0.8,
+                            popup=folium.Popup(popup_text, max_width=250)
+                        ).add_to(m2)
+
+                    colormap.add_to(m2)
+                    st_folium(m2, width=900, height=600)
+
+                    # Analyse de corrélation spatiale
+                    st.subheader("📈 Corrélation avec la position géographique")
+                    df_corr = pd.DataFrame({
+                        'Magasin': mags_valides,
+                        'latitude': [coord_map[m][0] for m in mags_valides],
+                        'longitude': [coord_map[m][1] for m in mags_valides],
+                        'indicateur': [store_metrics[m][champ] for m in mags_valides]
+                    })
+
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        fig_lat = px.scatter(df_corr, x='latitude', y='indicateur',
+                                             trendline='ols',
+                                             title=f"{choix_indicateur} vs Latitude")
+                        fig_lat.update_layout(template="gilroy_export")
+                        fig_lat = force_black_axes(fig_lat)
+                        corr_lat = np.corrcoef(df_corr['latitude'], df_corr['indicateur'])[0,1]
+                        st.plotly_chart(fig_lat, use_container_width=True)
+                        st.caption(f"Corrélation de Pearson : {corr_lat:.3f}")
+                    with col2:
+                        fig_lon = px.scatter(df_corr, x='longitude', y='indicateur',
+                                             trendline='ols',
+                                             title=f"{choix_indicateur} vs Longitude")
+                        fig_lon.update_layout(template="gilroy_export")
+                        fig_lon = force_black_axes(fig_lon)
+                        corr_lon = np.corrcoef(df_corr['longitude'], df_corr['indicateur'])[0,1]
+                        st.plotly_chart(fig_lon, use_container_width=True)
+                        st.caption(f"Corrélation de Pearson : {corr_lon:.3f}")
+                else:
+                    st.info("Aucune donnée valide pour l'indicateur choisi.")
+        else:
+            st.warning("Aucun magasin avec coordonnées et données exploitables.")
 
 # ------------------------------------------------------------
 # ONGLET 10 : AFFLUENCE (corrigé)
