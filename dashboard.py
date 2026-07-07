@@ -272,19 +272,24 @@ DEFAULT_ANOMALY_SETTINGS = {
 
 def make_hashable(df):
     """
-    Convertit TOUTES les colonnes 'object' contenant des listes, dicts ou ndarray
-    en chaînes JSON, sans se limiter à un échantillon.
+    Convertit TOUTE valeur non hashable (list, dict, ndarray, etc.)
+    en chaîne JSON, de manière exhaustive.
+    Teste hash() sur chaque valeur pour détection fiable.
     """
     df = df.copy()
     for col in df.columns:
         if df[col].dtype == object:
-            non_null = df[col].dropna()
-            if not non_null.empty:
-                types_present = non_null.map(type).value_counts()
-                if any(t in (list, dict, np.ndarray) for t in types_present.index):
-                    df[col] = df[col].apply(
-                        lambda x: json.dumps(x, ensure_ascii=False) if isinstance(x, (list, dict, np.ndarray)) else x
-                    )
+            def _safe(v):
+                if isinstance(v, str) or v is None:
+                    return v
+                if isinstance(v, float) and np.isnan(v):
+                    return v
+                try:
+                    hash(v)
+                    return v
+                except TypeError:
+                    return json.dumps(v, ensure_ascii=False)
+            df[col] = df[col].apply(_safe)
     return df
 
 def deserialize_obj_cols(df):
