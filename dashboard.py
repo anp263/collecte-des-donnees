@@ -2,6 +2,7 @@
 import os
 import sys
 import streamlit as st
+_ = st.cache_data.clear()  # VIDAGE UNIQUE - à retirer après
 import pandas as pd
 import sqlite3
 import matplotlib.font_manager as fm
@@ -114,10 +115,29 @@ _DOWNLOAD_COUNTER = 0
 # Sauvegarde de la fonction originale
 _original_plotly_chart = st.plotly_chart
 
+def _clean_nan_fig(fig):
+    import numpy as _np
+    try:
+        for trace in fig.data:
+            for attr in ['x', 'y', 'z', 'text', 'customdata']:
+                if hasattr(trace, attr):
+                    vals = getattr(trace, attr)
+                    if vals is not None:
+                        cleaned = [None if isinstance(v, (int, float)) and (_np.isnan(v) or _np.isinf(v)) else v for v in vals]
+                        setattr(trace, attr, cleaned)
+    except:
+        pass
+    return fig
+
 def plotly_chart_with_download(figure_or_data, *args, **kwargs):
     """
     Affiche un graphique Plotly et ajoute un bouton de téléchargement PNG.
+    Nettoie les NaN/Inf avant affichage.
     """
+    try:
+        figure_or_data = _clean_nan_fig(figure_or_data)
+    except:
+        pass
     # 1. Affichage avec la fonction originale
     _original_plotly_chart(figure_or_data, *args, **kwargs)
 
@@ -205,10 +225,10 @@ DB_PATH = "consolidated.db"
 
 @st.cache_resource
 def get_db_connection():
-    """Retourne une connexion SQLite unique (cache_resource = singleton)."""
+    """Retourne une connexion SQLite (multithread-safe)."""
     if not os.path.exists(DB_PATH):
         return None
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA cache_size=-200000")  # 200 MB cache
     _ensure_db_indexes(conn)
@@ -271,25 +291,17 @@ DEFAULT_ANOMALY_SETTINGS = {
 # ============================================================
 
 def make_hashable(df):
-    """
-    Convertit TOUTE valeur non hashable (list, dict, ndarray, etc.)
-    en chaîne JSON, de manière exhaustive.
-    Teste hash() sur chaque valeur pour détection fiable.
-    """
+    """Convertit TOUTES les colonnes object contenant listes/dicts en JSON. Version la plus simple possible."""
     df = df.copy()
     for col in df.columns:
         if df[col].dtype == object:
-            def _safe(v):
-                if isinstance(v, str) or v is None:
-                    return v
-                if isinstance(v, float) and np.isnan(v):
-                    return v
-                try:
-                    hash(v)
-                    return v
-                except TypeError:
-                    return json.dumps(v, ensure_ascii=False)
-            df[col] = df[col].apply(_safe)
+            try:
+                # Vérifier si au moins une valeur est non-hashable
+                test_vals = [v for v in df[col].dropna().values[:50] if v is not None]
+                if test_vals and not all(isinstance(v, str) for v in test_vals):
+                    df[col] = df[col].apply(lambda x: json.dumps(x, ensure_ascii=False) if not isinstance(x, str) else x)
+            except:
+                pass
     return df
 
 def deserialize_obj_cols(df):
@@ -837,7 +849,10 @@ def is_peak(dt, secteur, config):
 @timed
 @st.cache_data(ttl=3600, show_spinner="Chargement des données…")
 def load_db_internal():
-    """Charge les données depuis SQLite avec cache long (1h)."""
+    """Charge les données depuis SQLite. Ne crée PAS data_dict/anomalies_list ici.
+    Ces colonnes seront créées APRES le cache dans le flux principal."""
+    import time as _tmod
+    _t0 = _tmod.time()
     if not os.path.exists(DB_PATH):
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), \
                "Fichier 'consolidated.db' introuvable. Exécutez d'abord process_daily.py."
@@ -846,36 +861,25 @@ def load_db_internal():
         if conn is None:
             return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), "Connexion DB impossible."
         
-        # Chargement avec colonnes limitées (pas de SELECT *) pour réduire la mémoire
+        _t1 = _tmod.time()
         df_q = pd.read_sql("SELECT uuid, type, date, heure, lieu, enqueteur, test_mode, statut, anomalies, data FROM questionnaires", conn)
+        print(f"[DEBUG] load_db: questionnaires = {len(df_q)} lignes ({_tmod.time()-_t1:.1f}s)")
+        _t2 = _tmod.time()
         df_c = pd.read_sql("SELECT uuid, date, debut, fin, lieu, enqueteur, test_mode, total, anomalies, data FROM countings", conn)
+        print(f"[DEBUG] load_db: countings = {len(df_c)} lignes ({_tmod.time()-_t2:.1f}s)")
+        _t3 = _tmod.time()
         df_p = pd.read_sql("SELECT uuid, date, supermarche, marque, conditionnement, prix, enqueteur, test_mode, anomalies, data FROM prices", conn)
+        print(f"[DEBUG] load_db: prices = {len(df_p)} lignes ({_tmod.time()-_t3:.1f}s)")
     except sqlite3.Error as e:
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), f"Erreur de lecture de la base : {e}"
 
-    # Parsing JSON en lot optimisé
-    for df in [df_q, df_c, df_p]:
-        if 'data' in df.columns:
-            mask_data = df['data'].notna()
-            df.loc[mask_data, 'data_dict'] = df.loc[mask_data, 'data'].apply(
-                lambda x: json.loads(x) if isinstance(x, str) and len(x) > 0 else {}
-            )
-            df.loc[~mask_data, 'data_dict'] = [{}] * (~mask_data).sum()
-        if 'anomalies' in df.columns:
-            mask_anom = df['anomalies'].notna()
-            df.loc[mask_anom, 'anomalies_list'] = df.loc[mask_anom, 'anomalies'].apply(
-                lambda x: json.loads(x) if isinstance(x, str) and len(x) > 0 else []
-            )
-            df.loc[~mask_anom, 'anomalies_list'] = [[]] * (~mask_anom).sum()
+    # PAS de parsing JSON ici ! Colonnes 'data' et 'anomalies' restent JSON strings.
+    # PAS de make_hashable non plus (DataFrame déjà hashable sans colonnes dict/list)
 
     if 'statut' not in df_q.columns:
         df_q['statut'] = 'Accepté'
 
-    # Sérialisation pour le cache Streamlit
-    df_q = make_hashable(df_q)
-    df_c = make_hashable(df_c)
-    df_p = make_hashable(df_p)
-
+    print(f"[DEBUG] load_db: TEMPS TOTAL = {_tmod.time()-_t0:.1f}s (3 requetes SQL seulement)")
     return df_q, df_c, df_p, None
 
 def load_db():
@@ -886,7 +890,6 @@ def load_db():
 
 
 @timed
-@st.cache_data(ttl=3600)
 def prepare_supermarche_data(df_supermarche_full):
     """Ajoute les colonnes dérivées (Sexe, Âge, Tranche_age, consentement) et retourne un tuple (df_enrichi, acheteurs_global_full)."""
     # ⬇️ Désérialisation
@@ -1135,7 +1138,6 @@ def load_frequentation_data():
 # ============================================================
 
 @timed
-@st.cache_data(ttl=3600, show_spinner=False)
 def cached_compute_k_factors(magasin, df_c_f, df_sm, df_profils_pivot, secteur_profiles, magasin_mapping):
     # Désérialisation
     df_c_f = deserialize_obj_cols(df_c_f)
@@ -1364,6 +1366,14 @@ def estimate_daily_flow(magasin, jour_code, k_sem, k_we, df_sm, df_profils_pivot
 # Chargement effectif des données
 # ============================================================
 df_q, df_c, df_p = load_db()
+# Création de data_dict et anomalies_list APRÈS le cache (pas hashé)
+for _df in [df_q, df_c, df_p]:
+    if 'data' in _df.columns:
+        _df['data_dict'] = _df['data'].apply(
+            lambda x: json.loads(x) if isinstance(x, str) and len(x) > 0 else {})
+    if 'anomalies' in _df.columns:
+        _df['anomalies_list'] = _df['anomalies'].apply(
+            lambda x: json.loads(x) if isinstance(x, str) and len(x) > 0 else [])
 df_sm, df_prices_ext = load_supermarches()
 
 # Normalisation supermarchés
@@ -1961,7 +1971,6 @@ def prix_formatte(montant_fc, devise=None, taux=None):
     return f"{val:,.2f} {symbol}"
 
 @timed
-@st.cache_data(ttl=3600, show_spinner=False)
 def compute_all_k_data(selected_mags_tuple, df_c_f, df_sm, df_profils_pivot, secteur_profiles, magasin_mapping, k_overrides):
     # Désérialisation pour compatibilité cache
     df_c_f = deserialize_obj_cols(df_c_f)
@@ -1979,7 +1988,6 @@ def compute_all_k_data(selected_mags_tuple, df_c_f, df_sm, df_profils_pivot, sec
     return all_k_data
 
 @timed
-@st.cache_data(ttl=3600)
 def prepare_menage_unifie(df_q_f_raw, df_sm, commune_niveau):
     # ⬇️ Désérialisation pour compatibilité cache
     df_q_f_raw = deserialize_obj_cols(df_q_f_raw)
@@ -2203,7 +2211,6 @@ def prepare_menage_unifie(df_q_f_raw, df_sm, commune_niveau):
 # --------------------------------------------------------------------
 
 @timed
-@st.cache_data(ttl=3600, show_spinner="Calcul du marché en cours…")
 def compute_market_estimation(
     selected_mags_tuple,
     df_c_f,
@@ -2593,6 +2600,8 @@ tabs = st.tabs([
 # ------------------------------------------------------------
 # ONGLET 0 : ACCUEIL
 # ------------------------------------------------------------
+import time as _tt_0
+_t0_0 = _tt_0.time()
 with tabs[0]:
     current_hash = get_sm_hash()
     if 'sm_hash' not in st.session_state:
@@ -2942,9 +2951,12 @@ with tabs[0]:
         save_planning_state([], st.session_state.selected_magasins)
         st.rerun()
 
+print(f"[TIMER_UI] onglet 0 = {_tt_0.time()-_t0_0:.1f}s")
 # ------------------------------------------------------------
 # ONGLET 1 : ENQUÊTEUR
 # ------------------------------------------------------------
+import time as _tt_1
+_t0_1 = _tt_1.time()
 with tabs[1]:
     st.header("👤 Statistiques par enquêteur")
 
@@ -3434,9 +3446,12 @@ with tabs[1]:
             df_jour = pd.DataFrame(lignes_jour)
             st.dataframe(df_jour, width='stretch')
 
+print(f"[TIMER_UI] onglet 1 = {_tt_1.time()-_t0_1:.1f}s")
 # ------------------------------------------------------------
 # ONGLET 2 : SUPERMARCHÉ
 # ------------------------------------------------------------
+import time as _tt_2
+_t0_2 = _tt_2.time()
 with tabs[2]:
     st.header("🛒 Questionnaires Supermarché")
 
@@ -4023,9 +4038,12 @@ with tabs[2]:
             # ----- 10. TÉLÉCHARGEMENT -----
             st.download_button("📥 Données brutes (CSV)", df_show_full.to_csv(index=False), "supermarche_data.csv")
 
+print(f"[TIMER_UI] onglet 2 = {_tt_2.time()-_t0_2:.1f}s")
 # ------------------------------------------------------------
 # ONGLET 3 : MÉNAGES
 # ------------------------------------------------------------
+import time as _tt_3
+_t0_3 = _tt_3.time()
 with tabs[3]:
     st.header("🏠 Questionnaires Ménage")
 
@@ -4610,9 +4628,12 @@ with tabs[3]:
 
             st.download_button("📥 Télécharger les données (CSV)", df_m.to_csv(index=False), "menages.csv")
 
+print(f"[TIMER_UI] onglet 3 = {_tt_3.time()-_t0_3:.1f}s")
 # ------------------------------------------------------------
 # ONGLET 4 : COMPTAGES & FLUX (refonte avec k unique)
 # ------------------------------------------------------------
+import time as _tt_4
+_t0_4 = _tt_4.time()
 with tabs[4]:
     st.header("🚶 Comptages & Flux – Affluence estimée par magasin")
 
@@ -5437,9 +5458,12 @@ with tabs[4]:
     st.plotly_chart(fig_freq_bars, width='stretch')
     st.caption(f"Basé sur {len(df_estim_sorted)} magasins avec facteur k calculable.")
 
+print(f"[TIMER_UI] onglet 4 = {_tt_4.time()-_t0_4:.1f}s")
 # ------------------------------------------------------------
 # ONGLET 5 : ESTIMATION DU MARCHÉ (corrigé)
 # ------------------------------------------------------------
+import time as _tt_5
+_t0_5 = _tt_5.time()
 with tabs[5]:
     st.header("📊 Estimation du marché de l'huile de palme rouge à Kinshasa")
 
@@ -5729,9 +5753,12 @@ with tabs[5]:
         else:
             st.info("Aucune donnée pour les corrélations.")
 
+print(f"[TIMER_UI] onglet 5 = {_tt_5.time()-_t0_5:.1f}s")
 # ------------------------------------------------------------
 # ONGLET 6 : PRIX & CONCURRENCE 
 # ------------------------------------------------------------
+import time as _tt_6
+_t0_6 = _tt_6.time()
 with tabs[6]:
     st.header("🏷️ Analyse des prix et concurrence")
 
@@ -6139,9 +6166,12 @@ with tabs[6]:
         csv = prix_ext.to_csv(index=False).encode('utf-8')
         st.download_button("📥 Télécharger les prix externes (CSV)", csv, "prix_externes.csv", "text/csv")
 
+print(f"[TIMER_UI] onglet 6 = {_tt_6.time()-_t0_6:.1f}s")
 # ------------------------------------------------------------
 # ONGLET 7 : PROFIL SUPERMARCHÉS 
 # ------------------------------------------------------------
+import time as _tt_7
+_t0_7 = _tt_7.time()
 with tabs[7]:
     st.header("🏪 Profil des supermarchés recensés")
     if df_sm.empty:
@@ -6312,10 +6342,13 @@ with tabs[7]:
         except Exception:
             st.info("Horaires non exploitables.")
 
+print(f"[TIMER_UI] onglet 7 = {_tt_7.time()-_t0_7:.1f}s")
 # ------------------------------------------------------------
 # ONGLET 8 : ANOMALIES (inchangé, pas de figures Plotly)
 # ------------------------------------------------------------
 
+import time as _tt_8
+_t0_8 = _tt_8.time()
 with tabs[8]:
     st.header("⚠️ Gestion des anomalies")
 
@@ -6770,9 +6803,12 @@ with tabs[8]:
     else:
         st.info("Aucune anomalie à afficher.")
 
+print(f"[TIMER_UI] onglet 8 = {_tt_8.time()-_t0_8:.1f}s")
 # ------------------------------------------------------------
 # ONGLET 9 : CARTE DES SUPERMARCHÉS ET MESURES
 # ------------------------------------------------------------
+import time as _tt_9
+_t0_9 = _tt_9.time()
 with tabs[9]:
     st.header("🗺️ Cartographie des supermarchés et des mesures GPS")
 
@@ -7270,9 +7306,12 @@ with tabs[9]:
         else:
             st.warning("Aucun magasin avec coordonnées et données exploitables.")
 
+print(f"[TIMER_UI] onglet 9 = {_tt_9.time()-_t0_9:.1f}s")
 # ------------------------------------------------------------
 # ONGLET 10 : AFFLUENCE (corrigé avec cache)
 # ------------------------------------------------------------
+import time as _tt_10
+_t0_10 = _tt_10.time()
 with tabs[10]:
     st.header("📊 Profils d'affluence par jour (Google Popular Times)")
 
@@ -7495,9 +7534,12 @@ with tabs[10]:
         st.dataframe(df_mapping, width='stretch')
         st.info("Ces correspondances servent à lier les données d'affluence aux magasins.")
 
+print(f"[TIMER_UI] onglet 10 = {_tt_10.time()-_t0_10:.1f}s")
 # ------------------------------------------------------------
 # ONGLET 11 : EXPORTATION
 # ------------------------------------------------------------
+import time as _tt_11
+_t0_11 = _tt_11.time()
 with tabs[11]:
     st.header("📤 Exportation de données")
 
