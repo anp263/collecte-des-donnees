@@ -2,7 +2,7 @@
 import os
 import sys
 import streamlit as st
-_ = st.cache_data.clear()  # VIDAGE UNIQUE - à retirer après
+# Cache vidé une fois (le parsing JSON est maintenant dans le flux principal) - à retirer après
 import pandas as pd
 import sqlite3
 import matplotlib.font_manager as fm
@@ -1366,14 +1366,14 @@ def estimate_daily_flow(magasin, jour_code, k_sem, k_we, df_sm, df_profils_pivot
 # Chargement effectif des données
 # ============================================================
 df_q, df_c, df_p = load_db()
-# Création de data_dict et anomalies_list APRÈS le cache (pas hashé)
+# Parsing JSON à la volée : on va remplacer les row['data_dict'] par _get_data(row)
+# et row['anomalies_list'] par _get_anom(row)
+import json as _json
 for _df in [df_q, df_c, df_p]:
     if 'data' in _df.columns:
-        _df['data_dict'] = _df['data'].apply(
-            lambda x: json.loads(x) if isinstance(x, str) and len(x) > 0 else {})
+        _df['data_dict'] = _df['data'].apply(lambda x: _json.loads(x) if isinstance(x, str) and len(x) > 0 else {})
     if 'anomalies' in _df.columns:
-        _df['anomalies_list'] = _df['anomalies'].apply(
-            lambda x: json.loads(x) if isinstance(x, str) and len(x) > 0 else [])
+        _df['anomalies_list'] = _df['anomalies'].apply(lambda x: _json.loads(x) if isinstance(x, str) and len(x) > 0 else [])
 df_sm, df_prices_ext = load_supermarches()
 
 # Normalisation supermarchés
