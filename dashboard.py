@@ -896,7 +896,6 @@ def load_supermarches():
     out, df_prices_ext, msg = load_supermarches_internal()
     if "illisible" in msg or "introuvable" in msg:
         st.error(msg)
-    elif msg:
     return out, df_prices_ext
 # ============================================================
 # Chargement des données d'affluence
@@ -2340,3 +2339,22 @@ pages = [
 ]
 pg = st.navigation(pages)
 pg.run()
+
+# ============================================================
+# Stockage des données dans st.session_state pour les pages
+# ============================================================
+st.session_state['df_sm'] = df_sm
+st.session_state['df_prices_ext'] = df_prices_ext
+st.session_state['df_q_f'] = df_q_f
+st.session_state['df_c_f'] = df_c_f
+st.session_state['df_p_f'] = df_p_f
+st.session_state['df_q'] = df_q
+st.session_state['df_c'] = df_c
+st.session_state['df_p'] = df_p
+st.session_state['df_supermarche'] = df_supermarche if not df_supermarche.empty else pd.DataFrame()
+st.session_state['df_supermarche_full'] = df_supermarche_full if not df_supermarche_full.empty else pd.DataFrame()
+st.session_state['df_menage'] = df_menage if not df_menage.empty else pd.DataFrame()
+st.session_state['df_q_export'] = df_q_export if not df_q_export.empty else pd.DataFrame()
+st.session_state['df_profils_pivot'] = df_profils_pivot if not df_profils_pivot.empty else pd.DataFrame()
+st.session_state['df_profils_long'] = df_profils_long if not df_profils_long.empty else pd.DataFrame()
+st.session_state['secteur_profiles'] = secteur_profiles if secteur_profiles is not None else pd.DataFrame()
