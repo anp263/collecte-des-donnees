@@ -255,8 +255,8 @@ if not df_supermarche_full.empty and not df_sm.empty:
         fig_taux.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
         fig_taux.update_layout(template="gilroy_export")
         fig_taux = force_black_axes(fig_taux)
-        st.plotly_chart(fig_taux)
-        st.caption(f"Basé sur {df_taux['Nombre de questionnaires'].sum()}) questionnaires valides hors refus.")
+        st.plotly_chart(fig_taux, width='stretch')
+        st.caption(f"Basé sur {df_taux['Nombre de questionnaires'].sum()} questionnaires valides hors refus.")
     else:
         st.info("Données insuffisantes pour le calcul du taux par niveau.")
 else:
@@ -357,7 +357,7 @@ if not prix_ext.empty and top8_brands_prix:
             fig_marque.update_yaxes(tickformat=",.0f")
         else:
             fig_marque.update_yaxes(tickformat=",.2f")
-        st.plotly_chart(fig_marque)
+        st.plotly_chart(fig_marque, width='stretch')
         st.caption(f"Basé sur {len(df_prix_marque_top8)} relevés de prix pour les marques du top 8.")
     else:
         st.info("Aucune donnée pour ce contenant.")

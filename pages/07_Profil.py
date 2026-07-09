@@ -23,6 +23,8 @@ df_sm = st.session_state.get('df_sm', pd.DataFrame())
 df_q_f = st.session_state.get('df_q_f', pd.DataFrame())
 df_supermarche_full = st.session_state.get('df_supermarche_full', pd.DataFrame())
 
+st.header("Profil des supermarchés")
+
 st.header("🏪 Profil des supermarchés recensés")
 if df_sm.empty:
     st.warning("Aucune donnée de supermarchés.")
@@ -42,6 +44,8 @@ else:
         fig_taille.update_traces(textinfo='percent+label')
         fig_taille.update_layout(template="gilroy_export")
         fig_taille = force_black_axes(fig_taille)
+        st.plotly_chart(fig_taille, width='stretch')
+        st.caption(f"Basé sur {total} supermarchés. Les pourcentages sont calculés sur l'ensemble des supermarchés.")
     with col2:
         st.subheader("Répartition par niveau socio-économique")
         socio_counts = df_sm['Niveau_socio'].value_counts()
@@ -53,64 +57,11 @@ else:
         fig_socio.update_traces(textinfo='percent+label')
         fig_socio.update_layout(template="gilroy_export")
         fig_socio = force_black_axes(fig_socio)
+        st.plotly_chart(fig_socio, width='stretch')
+        st.caption(f"Basé sur {total} supermarchés. Les pourcentages sont calculés sur l'ensemble des supermarchés.")
     st.subheader("Croisement Taille × Niveau socio-économique")
     cross_taille_socio = pd.crosstab(df_sm['Taille'], df_sm['Niveau_socio'])
     st.dataframe(cross_taille_socio)
-    
-    # --- Graphique : Supermarchés par strate avec présence d'huile ---
-    st.subheader("📊 Supermarchés par strate et présence d'huile")
-    # Créer la colonne strate
-    df_sm_strate = df_sm.copy()
-    df_sm_strate['Strate'] = df_sm_strate['Taille'] + ' / ' + df_sm_strate['Niveau_socio']
-    
-    price_cols_strate = [c for c in df_sm_strate.columns if ' - ' in c and any(u in c.lower() for u in ['l', 'litre'])]
-    df_sm_strate['Vend_huile'] = (df_sm_strate[price_cols_strate] > 0).any(axis=1)
-    
-    # Compter par strate
-    strate_counts = df_sm_strate.groupby('Strate').agg(
-        Total=('Nom', 'count'),
-        Vendent_huile=('Vend_huile', 'sum')
-    ).reset_index()
-    strate_counts['Ne_vendent_pas'] = strate_counts['Total'] - strate_counts['Vendent_huile']
-    
-    # Graphique en barres groupées
-    fig_strates = go.Figure()
-    fig_strates.add_trace(go.Bar(
-        name='Vendent de l\'huile',
-        x=strate_counts['Strate'], y=strate_counts['Vendent_huile'],
-        marker_color='#2ecc71',
-        text=strate_counts['Vendent_huile'],
-        textposition='outside'
-    ))
-    fig_strates.add_trace(go.Bar(
-        name='Ne vendent pas d\'huile',
-        x=strate_counts['Strate'], y=strate_counts['Ne_vendent_pas'],
-        marker_color='#e74c3c',
-        text=strate_counts['Ne_vendent_pas'],
-        textposition='outside'
-    ))
-    # Ajouter le total au-dessus
-    fig_strates.add_trace(go.Scatter(
-        name='Total',
-        x=strate_counts['Strate'],
-        y=strate_counts['Total'],
-        mode='markers+text',
-        marker=dict(symbol='diamond', size=8, color='#3498db'),
-        text=strate_counts['Total'],
-        textposition='top center',
-        showlegend=True
-    ))
-    fig_strates.update_layout(
-        barmode='group',
-        title='Supermarchés par strate (Taille × Niveau socio-économique)',
-        xaxis_title='Strate',
-        yaxis_title='Nombre de supermarchés',
-        legend_title='',
-        template='gilroy_export'
-    )
-    fig_strates = force_black_axes(fig_strates)
-    st.plotly_chart(fig_strates)
-    st.caption(f"Basé sur {len(df_sm_strate)} supermarchés. Les 9 strates sont les combinaisons de Taille et Niveau socio-économique.")
     price_cols = [c for c in df_sm.columns if ' - ' in c and any(u in c.lower() for u in ['l', 'litre'])]
     df_sm['Presence_huile'] = (df_sm[price_cols] > 0).any(axis=1)
     df_sm['Presence_huile_label'] = df_sm['Presence_huile'].map({True: 'Oui', False: 'Non'})
@@ -132,6 +83,8 @@ else:
         fig_pres_socio.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
         fig_pres_socio.update_layout(template="gilroy_export")
         fig_pres_socio = force_black_axes(fig_pres_socio)
+        st.plotly_chart(fig_pres_socio, width='stretch')
+        st.caption(f"Basé sur {total} supermarchés. Les pourcentages sont calculés par niveau.")
     with col_b:
         st.write("Par taille")
         cross_presence_taille = pd.crosstab(df_sm['Taille'], df_sm['Presence_huile_label'])
@@ -147,6 +100,8 @@ else:
         fig_pres_taille.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
         fig_pres_taille.update_layout(template="gilroy_export")
         fig_pres_taille = force_black_axes(fig_pres_taille)
+        st.plotly_chart(fig_pres_taille, width='stretch')
+        st.caption(f"Basé sur {total} supermarchés. Les pourcentages sont calculés par taille.")
     st.subheader("Nombre de supermarchés par chaîne")
     if 'Chaine' in df_sm.columns:
         chaine_counts = df_sm['Chaine'].value_counts().reset_index()
@@ -168,6 +123,8 @@ else:
         fig_chaine.update_layout(xaxis_title='Nombre de magasins', yaxis_title=None, showlegend=False,
                                  template="gilroy_export")
         fig_chaine = force_black_axes(fig_chaine)
+        st.plotly_chart(fig_chaine, width='stretch')
+        st.caption(f"Basé sur {total_chaines} supermarchés ayant une chaîne renseignée.")
     else:
         st.info("La colonne 'Chaine' n'est pas présente dans le fichier supermarchés.")
     st.subheader("Répartition par secteur")
@@ -183,6 +140,8 @@ else:
     fig_secteur.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
     fig_secteur.update_layout(template="gilroy_export")
     fig_secteur = force_black_axes(fig_secteur)
+    st.plotly_chart(fig_secteur, width='stretch')
+    st.caption(f"Basé sur {total} supermarchés.")
     st.subheader("Croisement Secteur × Taille")
     cross_secteur_taille = pd.crosstab(df_sm['Secteur'], df_sm['Taille'])
     st.dataframe(cross_secteur_taille)
@@ -205,7 +164,7 @@ else:
             fig_ouv.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
             fig_ouv.update_layout(template="gilroy_export")
             fig_ouv = force_black_axes(fig_ouv)
-            st.plotly_chart(fig_ouv)
+            st.plotly_chart(fig_ouv, width='stretch')
             st.caption(f"Basé sur {len(ouv_counts)} supermarchés ayant une heure d'ouverture renseignée.")
             duree_secteur = df_sm.groupby('Secteur')['duree_sem'].mean().round(1).reset_index()
             fig_duree = px.bar(
@@ -215,6 +174,8 @@ else:
             )
             fig_duree.update_layout(template="gilroy_export")
             fig_duree = force_black_axes(fig_duree)
+            st.plotly_chart(fig_duree, width='stretch')
+            st.caption(f"Basé sur les supermarchés ayant des horaires complets.")
     except Exception:
         st.info("Horaires non exploitables.")
 # ------------------------------------------------------------

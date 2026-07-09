@@ -351,7 +351,7 @@ else:
             fig_heat_sem.update_xaxes(tickvals=list(range(0,24,2)))
             fig_heat_sem.update_layout(template="gilroy_export")
             fig_heat_sem = force_black_axes(fig_heat_sem)
-            st.plotly_chart(fig_heat_sem)
+            st.plotly_chart(fig_heat_sem, width='stretch', key="heat_sem")
             st.caption(f"Basé sur les profils Google de {len(df_sem_heat)} secteurs. Les valeurs sont en % d'occupation maximale.")
         with col2:
             st.markdown("**Week‑end (sam‑dim)**")
@@ -367,7 +367,7 @@ else:
             fig_heat_we.update_xaxes(tickvals=list(range(0,24,2)))
             fig_heat_we.update_layout(template="gilroy_export")
             fig_heat_we = force_black_axes(fig_heat_we)
-            st.plotly_chart(fig_heat_we)
+            st.plotly_chart(fig_heat_we, width='stretch', key="heat_we")
             st.caption(f"Basé sur les profils Google de {len(df_we_heat)} secteurs. Les valeurs sont en % d'occupation maximale.")
         secteur_sel = st.selectbox("Détail pour un secteur", secteurs_a_afficher, key="sect_detail")
         row_sec = secteur_profiles[secteur_profiles['secteur'] == secteur_sel].iloc[0]
@@ -386,6 +386,8 @@ else:
         fig_pointe.update_yaxes(title_text="Occupation (%)")
         fig_pointe.update_layout(title=f"Profil d’affluence – secteur {secteur_sel} (avec top 3 heures)", template="gilroy_export")
         fig_pointe = force_black_axes(fig_pointe)
+        st.plotly_chart(fig_pointe, width='stretch', key="pointe_secteur")
+        st.caption(f"Basé sur les données Google Popular Times pour le secteur {secteur_sel}. Les zones colorées mettent en évidence les 3 heures de pointe.")
         top_data = []
         for secteur in secteurs_a_afficher:
             row = secteur_profiles[secteur_profiles['secteur'] == secteur].iloc[0]
@@ -467,7 +469,7 @@ if mag_gantt:
                               yaxis=dict(visible=False), height=300, showlegend=True,
                               template="gilroy_export")
         fig_cov = force_black_axes(fig_cov)
-        st.plotly_chart(fig_cov)
+        st.plotly_chart(fig_cov, width='stretch', key="cov_hours")
         st.caption(f"Basé sur {len(sessions)} sessions de comptage. Les rectangles colorés montrent les plages horaires couvertes, les zones grisées les horaires d'ouverture du magasin.")
         def compute_cov_hours(intervals):
             merged = merge_intervals_minutes(intervals)
@@ -511,7 +513,7 @@ if mag_c:
             fig_coher.update_yaxes(title_text="Flux réel (clients/h)", tickformat=",.0f")
             fig_coher.update_layout(template="gilroy_export")
             fig_coher = force_black_axes(fig_coher)
-            st.plotly_chart(fig_coher)
+            st.plotly_chart(fig_coher, width='stretch', key="coherence")
             st.caption(f"Basé sur {len(points)} sessions de comptage. La droite y=x représente une prédiction parfaite.")
         else:
             st.info("Impossible de calculer les flux prédits (k manquant).")
@@ -713,7 +715,7 @@ else:
             fig_box_sem.update_yaxes(tickformat=",.0f")
             fig_box_sem.update_layout(template="gilroy_export")
             fig_box_sem = force_black_axes(fig_box_sem)
-            st.plotly_chart(fig_box_sem)
+            st.plotly_chart(fig_box_sem, width='stretch', key="box_sem")
             st.caption(f"Basé sur {len(df_estim)} magasins. Les points représentent chaque magasin.")
         with col2:
             fig_box_we = px.box(df_estim, x='Segment', y='we_med',
@@ -723,7 +725,7 @@ else:
             fig_box_we.update_yaxes(tickformat=",.0f")
             fig_box_we.update_layout(template="gilroy_export")
             fig_box_we = force_black_axes(fig_box_we)
-            st.plotly_chart(fig_box_we)
+            st.plotly_chart(fig_box_we, width='stretch', key="box_we")
             st.caption(f"Basé sur {len(df_estim)} magasins. Les points représentent chaque magasin.")
         fig_box_total = px.box(df_estim, x='Segment', y='total_med',
                                labels={'Segment': 'Segment', 'total_med': 'Total hebdomadaire estimé'},
@@ -732,7 +734,7 @@ else:
         fig_box_total.update_yaxes(tickformat=",.0f")
         fig_box_total.update_layout(template="gilroy_export")
         fig_box_total = force_black_axes(fig_box_total)
-        st.plotly_chart(fig_box_total)
+        st.plotly_chart(fig_box_total, width='stretch', key="box_total")
         st.caption(f"Basé sur {len(df_estim)} magasins. Les points représentent chaque magasin.")
     # Stockage sécurisé pour l'export
     if 'df_estim' in locals():
@@ -775,7 +777,7 @@ fig_freq_bars.update_layout(
     template="gilroy_export"
 )
 fig_freq_bars = force_black_axes(fig_freq_bars)
-st.plotly_chart(fig_freq_bars)
+st.plotly_chart(fig_freq_bars, width='stretch')
 st.caption(f"Basé sur {len(df_estim_sorted)} magasins avec facteur k calculable.")
 # ------------------------------------------------------------
 # ONGLET 5 : ESTIMATION DU MARCHÉ (corrigé)
