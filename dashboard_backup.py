@@ -2199,7 +2199,7 @@ def compute_market_estimation(
                 beta = S_fqL/S_fq
                 return pop*beta*qpers
             pop_min, pop_max = pop_bounds[niveau]
-            B = 1000  # réduit pour performance
+            B = 2000  # réduit pour performance
             V_boot = []
             for _ in range(B):
                 idx = np.random.choice(n, size=n, replace=True)

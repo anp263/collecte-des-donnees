@@ -7,16 +7,56 @@ import plotly.graph_objects as go
 from datetime import datetime
 import numpy as np
 from utils import *
-
-# Récupérer les données depuis la session
-
-import os
-import sys
-import re
-import json
-import hashlib
+import os, sys, re, json, hashlib
 from datetime import datetime, time, date, timedelta
 
+# ============================================================
+# Cache des résultats basé sur un hash des paramètres
+# ============================================================
+def _get_cache_key():
+    """Retourne un hash unique pour l'état actuel des filtres."""
+    dr = st.session_state.get('sidebar_date_range', (None, None))
+    if isinstance(dr, (list, tuple)) and len(dr) >= 2:
+        dr_key = f"{dr[0]}_{dr[1]}"
+    else:
+        dr_key = str(dr)
+    key_parts = [
+        dr_key,
+        str(st.session_state.get('sidebar_enqueteur', 'Tous')),
+        str(sorted(st.session_state.get('selected_magasins', []))),
+        str(st.session_state.get('devise_globale', 'FC')),
+        str(st.session_state.get('taux_change', 2800)),
+    ]
+    raw = '|'.join(key_parts)
+    return hashlib.md5(raw.encode()).hexdigest()
+
+def _get_cached(key, default=None):
+    """Récupère une valeur du cache de la page si la clé est valide."""
+    cache = st.session_state.get('_accueil_cache', {})
+    cache_key = st.session_state.get('_accueil_cache_key', '')
+    current_key = _get_cache_key()
+    if cache_key == current_key and key in cache:
+        return cache[key]
+    return default
+
+def _set_cached(key, value):
+    """Stocke une valeur dans le cache de la page."""
+    current_key = _get_cache_key()
+    if '_accueil_cache' not in st.session_state or st.session_state.get('_accueil_cache_key') != current_key:
+        st.session_state['_accueil_cache'] = {}
+        st.session_state['_accueil_cache_key'] = current_key
+    st.session_state['_accueil_cache'][key] = value
+
+def _clear_cache():
+    """Vide le cache si les filtres changent."""
+    current_key = _get_cache_key()
+    if st.session_state.get('_accueil_cache_key') != current_key:
+        st.session_state['_accueil_cache'] = {}
+        st.session_state['_accueil_cache_key'] = current_key
+
+_clear_cache()
+
+# Récupérer les données depuis la session
 df_q = st.session_state.get('df_q', pd.DataFrame())
 df_c = st.session_state.get('df_c', pd.DataFrame())
 df_p = st.session_state.get('df_p', pd.DataFrame())
@@ -99,7 +139,7 @@ def compute_coverage_stats(df_c_f, magasin):
     texte_we, heures_we = process_group(comps['est_weekend'])
     return texte_sem, texte_we, heures_sem, heures_we
 # ================================================================
-# Progression globale – Nouvelle version
+# Progression globale – Nouvelle version (avec cache)
 # ================================================================
 st.header("📈 Progression globale")
 if not selected_mags:
@@ -113,53 +153,72 @@ if not selected_mags:
     heures_mag = {}
     q_faits = {}
 else:
-    # --- Heures de comptage (semaine / week‑end) ---
-    if not df_c_f.empty:
-        heures_sem = df_c_f[df_c_f['date_dt'].dt.weekday < 5]['duree_h'].sum()
-        heures_we  = df_c_f[df_c_f['date_dt'].dt.weekday >= 5]['duree_h'].sum()
+    # Utilisation du cache si disponible
+    cached = _get_cached('progression')
+    if cached is not None:
+        heures_sem, heures_we, q_sm_sem, q_sm_we, q_men_total = cached['metriques']
+        objectif_heures_sem, objectif_heures_we = cached['objectifs_heures']
+        objectif_q_sm_sem, objectif_q_sm_we = cached['objectifs_q']
+        objectif_men = cached['objectif_men']
+        heures_mag = cached['heures_mag']
+        q_faits = cached['q_faits']
     else:
-        heures_sem = 0.0
-        heures_we  = 0.0
-    objectif_heures_sem = (len(selected_mags) * 8) / 2
-    objectif_heures_we  = (len(selected_mags) * 8) / 2
-    # --- Questionnaires supermarché (tous les 'supermarche', statut != Refus) ---
-    q_sm_sem = q_sm_we = 0
-    if not df_supermarche_full.empty:
-        valides = df_supermarche_full[df_supermarche_full['statut'] != 'Refus']
-        q_sm_sem = len(valides[valides['date_dt'].dt.weekday < 5])
-        q_sm_we  = len(valides[valides['date_dt'].dt.weekday >= 5])
-    objectif_q_sm_sem = (len(selected_mags) * 100) / 2
-    objectif_q_sm_we  = (len(selected_mags) * 100) / 2
-    # --- Questionnaires ménages purs (type 'menage') ---
-    q_men_total = 0
-    if not df_q_f.empty:
-        df_men_purs = df_q_f[df_q_f['type'] == 'menage']
-        if not df_men_purs.empty:
-            if 'statut' in df_men_purs.columns:
-                q_men_total = len(df_men_purs[df_men_purs['statut'] != 'Refus'])
-            else:
-                q_men_total = len(df_men_purs)
-    objectif_men = 500
-    # --- Heures totales par magasin pour le tableau de détail (somme simple) ---
-    heures_mag = {}
-    for mag in selected_mags:
-        sessions_mag = df_c_f[df_c_f['lieu_officiel'] == mag] if not df_c_f.empty else pd.DataFrame()
-        if not sessions_mag.empty:
-            h_sem = sessions_mag[sessions_mag['date_dt'].dt.weekday < 5]['duree_h'].sum()
-            h_we  = sessions_mag[sessions_mag['date_dt'].dt.weekday >= 5]['duree_h'].sum()
+        # --- Heures de comptage (semaine / week‑end) ---
+        if not df_c_f.empty:
+            heures_sem = df_c_f[df_c_f['date_dt'].dt.weekday < 5]['duree_h'].sum()
+            heures_we  = df_c_f[df_c_f['date_dt'].dt.weekday >= 5]['duree_h'].sum()
         else:
-            h_sem = 0.0
-            h_we  = 0.0
-        heures_mag[mag] = (h_sem, h_we)
-    # --- Questionnaires supermarché par magasin (pour le tableau de détail) ---
-    q_faits = {}
-    for mag in selected_mags:
+            heures_sem = 0.0
+            heures_we  = 0.0
+        objectif_heures_sem = (len(selected_mags) * 8) / 2
+        objectif_heures_we  = (len(selected_mags) * 8) / 2
+        # --- Questionnaires supermarché (tous les 'supermarche', statut != Refus) ---
+        q_sm_sem = q_sm_we = 0
         if not df_supermarche_full.empty:
-            df_mag = df_supermarche_full[df_supermarche_full['magasin_officiel'] == mag]
-            valides = df_mag[df_mag['statut'] != 'Refus'] if 'statut' in df_mag.columns else df_mag
-            q_faits[mag] = len(valides)
-        else:
-            q_faits[mag] = 0
+            valides = df_supermarche_full[df_supermarche_full['statut'] != 'Refus']
+            q_sm_sem = len(valides[valides['date_dt'].dt.weekday < 5])
+            q_sm_we  = len(valides[valides['date_dt'].dt.weekday >= 5])
+        objectif_q_sm_sem = (len(selected_mags) * 100) / 2
+        objectif_q_sm_we  = (len(selected_mags) * 100) / 2
+        # --- Questionnaires ménages purs (type 'menage') ---
+        q_men_total = 0
+        if not df_q_f.empty:
+            df_men_purs = df_q_f[df_q_f['type'] == 'menage']
+            if not df_men_purs.empty:
+                if 'statut' in df_men_purs.columns:
+                    q_men_total = len(df_men_purs[df_men_purs['statut'] != 'Refus'])
+                else:
+                    q_men_total = len(df_men_purs)
+        objectif_men = 500
+        # --- Heures totales par magasin pour le tableau de détail ---
+        heures_mag = {}
+        for mag in selected_mags:
+            sessions_mag = df_c_f[df_c_f['lieu_officiel'] == mag] if not df_c_f.empty else pd.DataFrame()
+            if not sessions_mag.empty:
+                h_sem = sessions_mag[sessions_mag['date_dt'].dt.weekday < 5]['duree_h'].sum()
+                h_we  = sessions_mag[sessions_mag['date_dt'].dt.weekday >= 5]['duree_h'].sum()
+            else:
+                h_sem = 0.0
+                h_we  = 0.0
+            heures_mag[mag] = (h_sem, h_we)
+        # --- Questionnaires supermarché par magasin ---
+        q_faits = {}
+        for mag in selected_mags:
+            if not df_supermarche_full.empty:
+                df_mag = df_supermarche_full[df_supermarche_full['magasin_officiel'] == mag]
+                valides = df_mag[df_mag['statut'] != 'Refus'] if 'statut' in df_mag.columns else df_mag
+                q_faits[mag] = len(valides)
+            else:
+                q_faits[mag] = 0
+        # Mise en cache
+        _set_cached('progression', {
+            'metriques': (heures_sem, heures_we, q_sm_sem, q_sm_we, q_men_total),
+            'objectifs_heures': (objectif_heures_sem, objectif_heures_we),
+            'objectifs_q': (objectif_q_sm_sem, objectif_q_sm_we),
+            'objectif_men': objectif_men,
+            'heures_mag': heures_mag,
+            'q_faits': q_faits
+        })
 # ================================================================
 # Affichage des métriques de progression
 # ================================================================

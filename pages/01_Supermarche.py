@@ -136,9 +136,8 @@ else:
                                             'Niveau socio-économique': 'Niveau'},
                                     title="Taux d'achat par segment (taille × niveau)")
                 fig_seg_sm.update_layout(template="gilroy_export")
-                fig_seg_sm = force_black_axes(fig_seg_sm)
-                st.plotly_chart(fig_seg_sm, width='stretch')
-                st.caption(f"Basé sur {df_seg_sm['Nb questionnaires'].sum()} questionnaires valides (hors refus).")
+                fig_seg_sm = force_black_axes(fig_seg_sm, caption=f"Basé sur {df_seg_sm['Nb questionnaires'].sum()} questionnaires valides (hors refus).")
+                st.plotly_chart(fig_seg_sm)
         # ----- 3. MARQUES ET RAISONS D'ACHAT (avec top 8 + Autres) -----
         st.subheader("🏷️ Marques et raisons d'achat")
         acheteurs_global = df_show[df_show['Q1'] == 'Oui'].copy() if not df_show.empty else pd.DataFrame()
@@ -168,7 +167,8 @@ else:
                 fig_marq.update_traces(textinfo='percent+label', sort=False)
                 fig_marq.update_layout(template="gilroy_export")
                 fig_marq = force_black_axes(fig_marq)
-                st.plotly_chart(fig_marq, width='stretch')
+                st.plotly_chart(fig_marq)
+
                 st.caption(f"Basé sur {len(acheteurs_filt)} acheteurs. Les pourcentages sont calculés sur l'ensemble des acheteurs (marques reconnues).")
             else:
                 st.info("Aucun acheteur avec marque reconnue.")
@@ -187,7 +187,7 @@ else:
                     fig_rais.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
                     fig_rais.update_layout(template="gilroy_export")
                     fig_rais = force_black_axes(fig_rais)
-                    st.plotly_chart(fig_rais, width='stretch')
+                    st.plotly_chart(fig_rais)
                     st.caption(f"Basé sur {len(acheteurs_filt)} acheteurs. Un acheteur peut citer plusieurs raisons.")
                 else:
                     st.info("Aucune raison.")
@@ -213,7 +213,7 @@ else:
                                           title="Effectifs marque × raison (top 8 marques)")
                     fig_cross.update_layout(template="gilroy_export")
                     fig_cross = force_black_axes(fig_cross)
-                    st.plotly_chart(fig_cross, width='stretch')
+                    st.plotly_chart(fig_cross)
                     st.caption(f"Basé sur {len(exploded_top)} citations parmi les acheteurs des 8 marques principales.")
         # ----- 4. VOLUMES ACHETÉS -----
         st.subheader("📦 Volumes achetés")
@@ -229,7 +229,7 @@ else:
                 fig_vol_hist.update_xaxes(tickformat=",.0f")
                 fig_vol_hist.update_layout(template="gilroy_export")
                 fig_vol_hist = force_black_axes(fig_vol_hist)
-                st.plotly_chart(fig_vol_hist, width='stretch')
+                st.plotly_chart(fig_vol_hist)
                 st.caption(f"Basé sur {len(acheteurs_vol)} acheteurs. Pourcentage calculé sur l'ensemble des acheteurs.")
             else:
                 st.info("Aucun acheteur.")
@@ -246,7 +246,7 @@ else:
                 fig_vol_marq.update_yaxes(tickformat=",.0f")
                 fig_vol_marq.update_layout(template="gilroy_export")
                 fig_vol_marq = force_black_axes(fig_vol_marq)
-                st.plotly_chart(fig_vol_marq, width='stretch')
+                st.plotly_chart(fig_vol_marq)
                 st.caption(f"Basé sur {len(df_vol_top8)} acheteurs ayant acheté une marque du top 8.")
             else:
                 st.info("Aucun acheteur.")
@@ -271,8 +271,8 @@ else:
                 fig_freq.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
                 fig_freq.update_layout(template="gilroy_export")
                 fig_freq = force_black_axes(fig_freq)
-                st.plotly_chart(fig_freq, width='stretch')
-                st.caption(f"Basé sur {freq_counts.sum()} acheteurs. Pourcentage calculé sur l'ensemble des acheteurs.")
+                st.plotly_chart(fig_freq)
+                st.caption(f"Basé sur {freq_counts.sum()}) acheteurs. Pourcentage calculé sur l'ensemble des acheteurs.")
             else:
                 st.info("Aucune réponse.")
         else:
@@ -308,7 +308,7 @@ else:
                     fig_crit.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
                     fig_crit.update_layout(template="gilroy_export")
                     fig_crit = force_black_axes(fig_crit)
-                    st.plotly_chart(fig_crit, width='stretch')
+                    st.plotly_chart(fig_crit)
                     st.caption(f"Basé sur {len(pret_df)} acheteurs prêts à payer plus. Un acheteur peut citer plusieurs critères.")
                 else:
                     st.info("Aucun critère positif.")
@@ -350,7 +350,7 @@ else:
                         fig_ecart_crit.update_traces(texttemplate='%{text}', textposition='outside')
                         fig_ecart_crit.update_layout(template="gilroy_export")
                         fig_ecart_crit = force_black_axes(fig_ecart_crit)
-                        st.plotly_chart(fig_ecart_crit, width='stretch')
+                        st.plotly_chart(fig_ecart_crit)
                         st.caption(f"Basé sur {len(pret_ecart)} acheteurs prêts à payer plus avec données de prix valides.")
                         with st.expander("📊 Boxplot des écarts par critère (top 8)"):
                             top_crit_list = top_ecart[top_ecart['Critère'] != 'Autres']['Critère'].tolist()
@@ -361,7 +361,7 @@ else:
                                                  title="Distribution de l'écart de prix par critère")
                                 fig_box.update_layout(template="gilroy_export")
                                 fig_box = force_black_axes(fig_box)
-                                st.plotly_chart(fig_box, width='stretch')
+                                st.plotly_chart(fig_box)
                                 st.caption(f"Basé sur {len(df_box)} observations. Les points représentent les acheteurs.")
                 else:
                     st.info("Aucun acheteur prêt à payer plus avec données de prix valides.")
@@ -387,7 +387,7 @@ else:
                 fig_sexe.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
                 fig_sexe.update_layout(template="gilroy_export")
                 fig_sexe = force_black_axes(fig_sexe)
-                st.plotly_chart(fig_sexe, width='stretch')
+                st.plotly_chart(fig_sexe)
                 st.caption(f"Basé sur {len(acheteurs_seg)} acheteurs. Pourcentage calculé sur l'ensemble des acheteurs.")
             with col2:
                 st.markdown("**Acheteurs par âge**")
@@ -402,7 +402,7 @@ else:
                 fig_age.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
                 fig_age.update_layout(template="gilroy_export")
                 fig_age = force_black_axes(fig_age)
-                st.plotly_chart(fig_age, width='stretch')
+                st.plotly_chart(fig_age)
                 st.caption(f"Basé sur {len(acheteurs_seg)} acheteurs. Pourcentage calculé sur l'ensemble des acheteurs.")
             st.markdown("**Heatmap des acheteurs (Âge × Sexe)**")
             heat_data = pd.crosstab(acheteurs_seg['Tranche_age'], acheteurs_seg['Sexe'])
@@ -412,7 +412,7 @@ else:
                                      title="Nombre d'acheteurs par âge et sexe")
                 fig_heat.update_layout(template="gilroy_export")
                 fig_heat = force_black_axes(fig_heat)
-                st.plotly_chart(fig_heat, width='stretch')
+                st.plotly_chart(fig_heat)
                 st.caption(f"Basé sur {len(acheteurs_seg)} acheteurs. Les effectifs sont indiqués dans chaque case.")
             st.markdown("**Volume acheté par âge et sexe**")
             vol_data = acheteurs_seg[['Sexe', 'Tranche_age', 'vol_litres']].dropna()
@@ -423,7 +423,7 @@ else:
                 fig_box_age.update_yaxes(tickformat=",.0f")
                 fig_box_age.update_layout(template="gilroy_export")
                 fig_box_age = force_black_axes(fig_box_age)
-                st.plotly_chart(fig_box_age, width='stretch')
+                st.plotly_chart(fig_box_age)
                 st.caption(f"Basé sur {len(vol_data)} acheteurs. La boîte montre la médiane et les quartiles.")
             else:
                 st.info("Données de volume insuffisantes.")
@@ -510,7 +510,6 @@ else:
                 fig_qual.update_layout(template="gilroy_export")
                 fig_qual = force_black_axes(fig_qual)
                 st.plotly_chart(fig_qual, width='stretch')
-                st.caption(f"Basé sur {nb_qual_rep} répondants ayant répondu à cette question. Un répondant peut citer plusieurs critères. Les critères à moins de 1% sont regroupés dans 'Autres'.")
             else:
                 st.info("Aucune réponse sur la reconnaissance de la qualité.")
             st.subheader("📣 Notoriété de RougeCongo")
@@ -529,7 +528,6 @@ else:
                     fig_conn.update_layout(template="gilroy_export")
                     fig_conn = force_black_axes(fig_conn)
                     st.plotly_chart(fig_conn, width='stretch')
-                    st.caption(f"Basé sur {nb_conn_rep} répondants ayant répondu à cette question.")
                 else:
                     st.info("Aucune donnée sur la connaissance.")
             with col_qual_rc:
@@ -554,7 +552,6 @@ else:
                     fig_rc_qual.update_layout(template="gilroy_export")
                     fig_rc_qual = force_black_axes(fig_rc_qual)
                     st.plotly_chart(fig_rc_qual, width='stretch')
-                    st.caption(f"Basé sur {nb_rc_qual_rep} répondants ayant répondu à cette question. Les qualités à moins de 1% sont regroupées dans 'Autres'. Un répondant peut citer plusieurs qualités.")
                 else:
                     st.info("Aucune réponse sur les qualités.")
         # ================================================================

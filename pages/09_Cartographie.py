@@ -472,8 +472,6 @@ else:
                     fig_lat.update_layout(template="gilroy_export")
                     fig_lat = force_black_axes(fig_lat)
                     corr_lat = np.corrcoef(df_corr['latitude'], df_corr['indicateur'])[0,1]
-                    st.plotly_chart(fig_lat, width='stretch')
-                    st.caption(f"Corrélation de Pearson : {corr_lat:.3f}")
                 with col2:
                     fig_lon = px.scatter(df_corr, x='longitude', y='indicateur',
                                          trendline='ols',
@@ -481,8 +479,6 @@ else:
                     fig_lon.update_layout(template="gilroy_export")
                     fig_lon = force_black_axes(fig_lon)
                     corr_lon = np.corrcoef(df_corr['longitude'], df_corr['indicateur'])[0,1]
-                    st.plotly_chart(fig_lon, width='stretch')
-                    st.caption(f"Corrélation de Pearson : {corr_lon:.3f}")
             else:
                 st.info("Aucune donnée valide pour l'indicateur choisi.")
     else:

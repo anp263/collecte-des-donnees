@@ -349,10 +349,22 @@ def get_sm_hash():
 # Fonctions ajoutées pour les pages
 # ============================================================
 
-def force_black_axes(fig, title_size=18, tick_size=15):
+def force_black_axes(fig, title_size=18, tick_size=15, caption=None):
     """
     Applique une police noire et des tailles explicites à tous les axes,
     aux légendes, annotations et titres d'une figure Plotly.
+    
+    Paramètres
+    ----------
+    fig : go.Figure
+        La figure à styliser.
+    title_size : int
+        Taille de la police des titres d'axes.
+    tick_size : int
+        Taille de la police des graduations.
+    caption : str, optional
+        Texte de légende à ajouter en bas de la figure (intégré dans la figure,
+        donc exportable en PNG).
     """
     # Titre général
     if fig.layout.title:
@@ -377,6 +389,16 @@ def force_black_axes(fig, title_size=18, tick_size=15):
     if fig.layout.annotations:
         for ann in fig.layout.annotations:
             ann.font.color = "black"
+    # Ajout du caption intégré dans la figure (exportable)
+    if caption:
+        fig.add_annotation(
+            text=caption,
+            xref="paper", yref="paper",
+            x=-0.07, y=-0.17,
+            showarrow=False,
+            font=dict(size=11, color="black", family="Gilroy, sans-serif")
+        )
+        fig.update_layout(margin=dict(b=80))
     return fig
 
 
@@ -403,6 +425,33 @@ def parse_criteres_smart(val):
     if current:
         result.append(current.strip())
     return result
+
+
+def plot_with_caption(fig, caption_text=None, **kwargs):
+    """
+    Affiche un graphique Plotly avec une caption intégrée dans la figure (exportable en PNG).
+    
+    Paramètres
+    ----------
+    fig : go.Figure
+        La figure Plotly à afficher.
+    caption_text : str, optional
+        Texte de caption à ajouter en bas de la figure.
+    **kwargs :
+        Arguments passés à st.plotly_chart (ex: width='stretch').
+    """
+    if caption_text:
+        import copy
+        fig = copy.deepcopy(fig)
+        fig.add_annotation(
+            text=caption_text,
+            xref="paper", yref="paper",
+            x=0.5, y=-0.12,
+            showarrow=False,
+            font=dict(size=11, color="gray", family="Gilroy, sans-serif")
+        )
+        fig.update_layout(margin=dict(b=80))
+    st.plotly_chart(fig, **kwargs)
 
 
 def get_top8_brands_from_acheteurs(df_acheteurs):

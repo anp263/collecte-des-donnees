@@ -362,8 +362,6 @@ else:
             fig_taille.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
             fig_taille.update_layout(template="gilroy_export")
             fig_taille = force_black_axes(fig_taille)
-            st.plotly_chart(fig_taille, width='stretch')
-            st.caption(f"Basé sur {nb_taille} ménages valides (exclusion de {nb_taille_exclus} ménages non valides).")
         with col_b:
             zone_counts = df_m['zone_socioeco'].value_counts()
             zone_pct = zone_counts / zone_counts.sum() * 100
@@ -383,8 +381,8 @@ else:
             fig_zone.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
             fig_zone.update_layout(showlegend=False, template="gilroy_export")
             fig_zone = force_black_axes(fig_zone)
-            st.plotly_chart(fig_zone, width='stretch')
-            st.caption(f"Basé sur {zone_pct.sum()} ménages (exclusion de {nb_inconnus_zone} ménages 'Inconnu').")
+            st.plotly_chart(fig_zone)
+            st.caption(f"Basé sur {zone_pct.sum()}) ménages (exclusion de {nb_inconnus_zone} ménages 'Inconnu').")
         st.subheader("📏 Taille moyenne du ménage par zone socioéconomique")
         df_tz = df_m[taille_valide & (df_m['zone_socioeco'] != 'Inconnu')]
         taille_zone = df_tz.groupby('zone_socioeco')['taille_menage'].mean().reset_index()
@@ -399,7 +397,7 @@ else:
         fig_tz.update_traces(texttemplate='%{text:.1f} pers.', textposition='outside')
         fig_tz.update_layout(showlegend=False, yaxis_title="Personnes", template="gilroy_export")
         fig_tz = force_black_axes(fig_tz)
-        st.plotly_chart(fig_tz, width='stretch')
+        st.plotly_chart(fig_tz)
         st.caption(f"Basé sur {len(df_tz)} ménages valides avec zone connue.")
         # ─── HABITUDES D'ACHAT PAR COMMUNE ──────────────────────────────
         st.subheader("📍 Habitudes d'achat par commune")
@@ -423,7 +421,7 @@ else:
                     fig_vol.update_traces(texttemplate='%{text:.1f} L', textposition='outside')
                     fig_vol.update_layout(template="gilroy_export")
                     fig_vol = force_black_axes(fig_vol)
-                    st.plotly_chart(fig_vol, width='stretch')
+                    st.plotly_chart(fig_vol)
                     st.caption(f"Basé sur {len(df_vol_commune)} acheteurs. Seules les communes avec ≥5 répondants sont affichées.")
                 else:
                     st.info("Pas assez de données de volume par commune.")
@@ -441,7 +439,7 @@ else:
                                     barmode='stack', text_auto='.1f')
                     fig_freq.update_layout(template="gilroy_export")
                     fig_freq = force_black_axes(fig_freq)
-                    st.plotly_chart(fig_freq, width='stretch')
+                    st.plotly_chart(fig_freq)
                     st.caption(f"Basé sur {len(df_freq_commune)} acheteurs. Les pourcentages sont calculés par commune.")
                 else:
                     st.info("Pas assez de données de fréquence par commune.")
@@ -474,7 +472,7 @@ else:
                                         barmode='stack', text_auto='.1f')
                         fig_lieu.update_layout(template="gilroy_export")
                         fig_lieu = force_black_axes(fig_lieu)
-                        st.plotly_chart(fig_lieu, width='stretch')
+                        st.plotly_chart(fig_lieu)
                         st.caption(f"Basé sur {len(df_pct_commune)} répondants. Les pourcentages sont des moyennes par répondant.")
                     else:
                         st.info("Données de lieux d'achat non exploitables.")
@@ -513,7 +511,7 @@ else:
                 fig_vol.update_traces(textposition='none')
                 fig_vol.update_layout(template="gilroy_export")
                 fig_vol = force_black_axes(fig_vol)
-                st.plotly_chart(fig_vol, width='stretch')
+                st.plotly_chart(fig_vol)
                 st.caption(f"Basé sur {len(df_vol)} répondants avec un volume valide (≤ {seuil_volume} L).")
             else:
                 st.info("Aucun volume valide.")
@@ -529,7 +527,7 @@ else:
                 fig_freq.update_traces(textinfo='percent+label')
                 fig_freq.update_layout(template="gilroy_export")
                 fig_freq = force_black_axes(fig_freq)
-                st.plotly_chart(fig_freq, width='stretch')
+                st.plotly_chart(fig_freq)
                 st.caption(f"Basé sur {len(freq_df)} acheteurs.")
             else:
                 st.info("Aucune fréquence renseignée pour les acheteurs.")
@@ -556,7 +554,7 @@ else:
             fig_marque.update_traces(textinfo='percent+label', sort=False)
             fig_marque.update_layout(template="gilroy_export")
             fig_marque = force_black_axes(fig_marque)
-            st.plotly_chart(fig_marque, width='stretch')
+            st.plotly_chart(fig_marque)
             st.caption(f"Basé sur {marque_serie.notna().sum()} réponses avec marque reconnue. Pourcentage calculé sur l'ensemble des répondants ({len(df_m)}).")
         else:
             st.info("Aucune marque.")
@@ -581,7 +579,7 @@ else:
                 fig_prix.update_yaxes(tickformat=",.2f", tickprefix="$ ")
             fig_prix.update_layout(template="gilroy_export")
             fig_prix = force_black_axes(fig_prix)
-            st.plotly_chart(fig_prix, width='stretch')
+            st.plotly_chart(fig_prix)
             st.caption(f"Basé sur {len(prix_plot)} réponses (≤ {fmt_nombre(seuil_prix_affichage,0)} FC/L). {nb_exclus_prix} valeurs extrêmes exclues.")
         else:
             st.info("Aucune valeur de prix au litre disponible.")
@@ -611,8 +609,6 @@ else:
                 fig_crit.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
                 fig_crit.update_layout(template="gilroy_export")
                 fig_crit = force_black_axes(fig_crit)
-                st.plotly_chart(fig_crit, width='stretch')
-                st.caption(f"Basé sur {pret_oui} répondants prêts à payer plus. Un répondant peut citer plusieurs critères.")
                 # Écart de prix
                 df_pret = df_m[df_m['pret_plus']].dropna(subset=['prix_num', 'prix_max']).copy()
                 if not df_pret.empty:
@@ -643,7 +639,7 @@ else:
                         fig_ecart.update_traces(texttemplate='%{text}', textposition='outside')
                         fig_ecart.update_layout(template="gilroy_export")
                         fig_ecart = force_black_axes(fig_ecart)
-                        st.plotly_chart(fig_ecart, width='stretch')
+                        st.plotly_chart(fig_ecart)
                         st.caption(f"Basé sur {len(df_pret)} répondants prêts à payer plus avec données de prix valides.")
                 else:
                     st.info("Données insuffisantes pour le calcul de l'écart.")
@@ -678,8 +674,6 @@ else:
                 fig_qual.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
                 fig_qual.update_layout(template="gilroy_export")
                 fig_qual = force_black_axes(fig_qual)
-                st.plotly_chart(fig_qual, width='stretch')
-                st.caption(f"Basé sur {nb_qual} répondants ayant répondu à la question. Les critères à moins de 1% sont regroupés dans 'Autres'.")
             else:
                 st.info("Aucun critère.")
         else:
@@ -701,8 +695,6 @@ else:
                     fig_conn.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
                     fig_conn.update_layout(template="gilroy_export")
                     fig_conn = force_black_axes(fig_conn)
-                    st.plotly_chart(fig_conn, width='stretch')
-                    st.caption(f"Basé sur {nb_rc_conn} répondants ayant répondu à la question.")
                 else:
                     st.info("Aucune réponse valide.")
             else:
@@ -732,8 +724,6 @@ else:
                     fig_rc_qual.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
                     fig_rc_qual.update_layout(template="gilroy_export")
                     fig_rc_qual = force_black_axes(fig_rc_qual)
-                    st.plotly_chart(fig_rc_qual, width='stretch')
-                    st.caption(f"Basé sur {nb_rc_qual} répondants ayant cité des qualités. Les qualités à moins de 1% sont regroupées dans 'Autres'.")
                 else:
                     st.info("Aucune réponse.")
             else:
@@ -765,7 +755,7 @@ else:
                     fig_lieux.update_traces(texttemplate='%{y:.1f}%', textposition='outside')
                     fig_lieux.update_layout(template="gilroy_export")
                     fig_lieux = force_black_axes(fig_lieux)
-                    st.plotly_chart(fig_lieux, width='stretch')
+                    st.plotly_chart(fig_lieux)
                     st.caption(f"Basé sur {len(df_pct)} questionnaires. Les pourcentages sont des moyennes par répondant.")
                 else:
                     st.info("Aucune répartition exploitable.")

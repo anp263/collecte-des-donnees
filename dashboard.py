@@ -43,10 +43,11 @@ pio.templates["gilroy_export"] = go.layout.Template(
     )
 )
 pio.templates.default = "gilroy_export"
-def force_black_axes(fig, title_size=18, tick_size=15):
+def force_black_axes(fig, title_size=18, tick_size=15, caption=None):
     """
     Applique une police noire et des tailles explicites à tous les axes,
     aux légendes, annotations et titres d'une figure Plotly.
+    Peut aussi ajouter un caption intégré dans la figure (exportable).
     """
     # Titre général
     if fig.layout.title:
@@ -71,6 +72,16 @@ def force_black_axes(fig, title_size=18, tick_size=15):
     if fig.layout.annotations:
         for ann in fig.layout.annotations:
             ann.font.color = "black"
+    # Ajout du caption intégré dans la figure (exportable)
+    if caption:
+        fig.add_annotation(
+            text=caption,
+            xref="paper", yref="paper",
+            x=0.02, y=-0.12,
+            showarrow=False,
+            font=dict(size=11, color="black", family="Gilroy, sans-serif")
+        )
+        fig.update_layout(margin=dict(b=80))
     return fig
 # ------------------------------------------------------------
 # Surcharge de st.plotly_chart pour ajouter le téléchargement
@@ -82,11 +93,15 @@ if "export_height" not in st.session_state:
     st.session_state.export_height = 600
 # Sauvegarde de la fonction originale
 _original_plotly_chart = st.plotly_chart
-if 'dl_counter' not in st.session_state:
-    st.session_state.dl_counter = 0
+import hashlib as _hashlib
+# Compteur global unique pour garantir des clés uniques entre toutes les figures
+if 'dl_global_counter' not in st.session_state:
+    st.session_state.dl_global_counter = 0
 def plotly_chart_with_download(figure_or_data, *args, **kwargs):
     """
     Affiche un graphique Plotly et ajoute un bouton de téléchargement PNG.
+    Chaque bouton a une clé ABSOLUMENT unique (hash + compteur global),
+    ce qui évite les doublons entre re-rendus.
     """
     _original_plotly_chart(figure_or_data, *args, **kwargs)
     import plotly.graph_objects as go
@@ -97,12 +112,15 @@ def plotly_chart_with_download(figure_or_data, *args, **kwargs):
     height = st.session_state.get("export_height", 600)
     try:
         img_bytes = fig.to_image(format="png", width=width, height=height, scale=2)
-        st.session_state.dl_counter += 1
-        key = f"dl_plot_{st.session_state.dl_counter}"
+        # Clé = hash + compteur global unique
+        fig_hash = _hashlib.md5(fig.to_json().encode()).hexdigest()[:12]
+        st.session_state.dl_global_counter += 1
+        ctr = st.session_state.dl_global_counter
+        key = f"dl_{ctr}_{fig_hash}"
         st.download_button(
             label="📥 Télécharger ce graphique (PNG)",
             data=img_bytes,
-            file_name=f"plot_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{key}.png",
+            file_name=f"plot_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{fig_hash}.png",
             mime="image/png",
             key=key
         )
