@@ -33,8 +33,6 @@ from utils import *
 from analytics import *
 
 st.header("🛒 Questionnaires Supermarché")
-
-st.header("🛒 Questionnaires Supermarché")
 if df_supermarche_full.empty:
     st.info("Aucun questionnaire supermarché trouvé pour les magasins sélectionnés.")
 else:

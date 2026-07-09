@@ -80,19 +80,15 @@ if "export_width" not in st.session_state:
     st.session_state.export_width = 1000
 if "export_height" not in st.session_state:
     st.session_state.export_height = 600
-# Compteur pour les clés uniques
-_DOWNLOAD_COUNTER = 0
 # Sauvegarde de la fonction originale
 _original_plotly_chart = st.plotly_chart
+if 'dl_counter' not in st.session_state:
+    st.session_state.dl_counter = 0
 def plotly_chart_with_download(figure_or_data, *args, **kwargs):
     """
     Affiche un graphique Plotly et ajoute un bouton de téléchargement PNG.
-    Nettoie les NaN/Inf avant affichage.
     """
-    #
-    # 1. Affichage avec la fonction originale
     _original_plotly_chart(figure_or_data, *args, **kwargs)
-    # 2. Vérifier que c'est bien une Figure Plotly
     import plotly.graph_objects as go
     if not isinstance(figure_or_data, go.Figure):
         return
@@ -100,16 +96,13 @@ def plotly_chart_with_download(figure_or_data, *args, **kwargs):
     width = st.session_state.get("export_width", 1000)
     height = st.session_state.get("export_height", 600)
     try:
-        # Génération de l'image PNG
         img_bytes = fig.to_image(format="png", width=width, height=height, scale=2)
-        # Création d'une clé unique basée sur le contenu de la figure
-        fig_hash = hashlib.md5(fig.to_json().encode()).hexdigest()
-        key = f"dl_plot_{fig_hash}"
-        # Bouton de téléchargement
+        st.session_state.dl_counter += 1
+        key = f"dl_plot_{st.session_state.dl_counter}"
         st.download_button(
             label="📥 Télécharger ce graphique (PNG)",
             data=img_bytes,
-            file_name=f"plot_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{fig_hash[:8]}.png",
+            file_name=f"plot_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{key}.png",
             mime="image/png",
             key=key
         )
