@@ -67,7 +67,7 @@ df_p_f = st.session_state.get('df_p_f', pd.DataFrame())
 df_supermarche_full = st.session_state.get('df_supermarche_full', pd.DataFrame())
 df_menage = st.session_state.get('df_menage', pd.DataFrame())
 df_q_export = st.session_state.get('df_q_export', pd.DataFrame())
-
+st.write("Nombre de lignes pour Newlys (Triangle) :", len(df_supermarche_full[df_supermarche_full['magasin_officiel'] == 'Newlys (Triangle)']))
 st.header("📊 Vue d'ensemble")
 
 current_hash = get_sm_hash()
@@ -85,6 +85,8 @@ elif st.session_state.sm_hash != current_hash:
 if 'selected_magasins' not in st.session_state:
     st.session_state.selected_magasins = []
 selected_mags = st.session_state.selected_magasins
+
+# Fonctions originales conservées (pour compatibilité avec d'autres pages)
 def merge_intervals(intervals):
     if not intervals:
         return [], 0
@@ -100,6 +102,7 @@ def merge_intervals(intervals):
     merged.append((current_start, current_end))
     total_duration = sum(end - start for start, end in merged)
     return merged, total_duration
+
 def compute_coverage_stats(df_c_f, magasin):
     if df_c_f.empty:
         return "Aucun comptage", "Aucun comptage", 0.0, 0.0
@@ -138,70 +141,54 @@ def compute_coverage_stats(df_c_f, magasin):
     texte_sem, heures_sem = process_group(~comps['est_weekend'])
     texte_we, heures_we = process_group(comps['est_weekend'])
     return texte_sem, texte_we, heures_sem, heures_we
+
 # ================================================================
-# Progression globale – Nouvelle version (avec cache)
+# Progression globale – Fusionnée (plus de semaine/week‑end, plus de ménages)
 # ================================================================
 st.header("📈 Progression globale")
+
 if not selected_mags:
     st.info("ℹ️ Aucun magasin sélectionné.")
-    heures_sem = heures_we = 0.0
-    q_sm_sem = q_sm_we = 0
-    q_men_total = 0
-    objectif_heures_sem = objectif_heures_we = 0
-    objectif_q_sm_sem = objectif_q_sm_we = 0
-    objectif_men = 500
+    heures_totales = 0.0
+    q_sm_total = 0
+    objectif_heures = 0
+    objectif_q_sm = 0
     heures_mag = {}
     q_faits = {}
 else:
-    # Utilisation du cache si disponible
     cached = _get_cached('progression')
     if cached is not None:
-        heures_sem, heures_we, q_sm_sem, q_sm_we, q_men_total = cached['metriques']
-        objectif_heures_sem, objectif_heures_we = cached['objectifs_heures']
-        objectif_q_sm_sem, objectif_q_sm_we = cached['objectifs_q']
-        objectif_men = cached['objectif_men']
+        heures_totales = cached['heures_totales']
+        q_sm_total = cached['q_sm_total']
+        objectif_heures = cached['objectif_heures']
+        objectif_q_sm = cached['objectif_q_sm']
         heures_mag = cached['heures_mag']
         q_faits = cached['q_faits']
     else:
-        # --- Heures de comptage (semaine / week‑end) ---
-        if not df_c_f.empty:
-            heures_sem = df_c_f[df_c_f['date_dt'].dt.weekday < 5]['duree_h'].sum()
-            heures_we  = df_c_f[df_c_f['date_dt'].dt.weekday >= 5]['duree_h'].sum()
-        else:
-            heures_sem = 0.0
-            heures_we  = 0.0
-        objectif_heures_sem = (len(selected_mags) * 8) / 2
-        objectif_heures_we  = (len(selected_mags) * 8) / 2
-        # --- Questionnaires supermarché (tous les 'supermarche', statut != Refus) ---
-        q_sm_sem = q_sm_we = 0
+        # Restriction aux magasins sélectionnés pour les heures de comptage
+        df_c_f_sel = df_c_f[df_c_f['lieu_officiel'].isin(selected_mags)] if not df_c_f.empty else pd.DataFrame()
+        heures_totales = df_c_f_sel['duree_h'].sum() if not df_c_f_sel.empty else 0.0
+
+        # Questionnaires supermarché valides (uniquement magasins sélectionnés)
         if not df_supermarche_full.empty:
-            valides = df_supermarche_full[df_supermarche_full['statut'] != 'Refus']
-            q_sm_sem = len(valides[valides['date_dt'].dt.weekday < 5])
-            q_sm_we  = len(valides[valides['date_dt'].dt.weekday >= 5])
-        objectif_q_sm_sem = (len(selected_mags) * 100) / 2
-        objectif_q_sm_we  = (len(selected_mags) * 100) / 2
-        # --- Questionnaires ménages purs (type 'menage') ---
-        q_men_total = 0
-        if not df_q_f.empty:
-            df_men_purs = df_q_f[df_q_f['type'] == 'menage']
-            if not df_men_purs.empty:
-                if 'statut' in df_men_purs.columns:
-                    q_men_total = len(df_men_purs[df_men_purs['statut'] != 'Refus'])
-                else:
-                    q_men_total = len(df_men_purs)
-        objectif_men = 500
-        # --- Heures totales par magasin pour le tableau de détail ---
+            df_sm_valides = df_supermarche_full[df_supermarche_full['statut'] != 'Refus']
+            df_sm_valides_sel = df_sm_valides[df_sm_valides['magasin_officiel'].isin(selected_mags)]
+            q_sm_total = len(df_sm_valides_sel)
+        else:
+            q_sm_total = 0
+
+        # Objectifs globaux (fusion des objectifs semaine + week‑end)
+        objectif_heures = len(selected_mags) * 8    # 8h par magasin
+        objectif_q_sm = len(selected_mags) * 100     # 100 questionnaires par magasin
+
+        # Heures totales par magasin pour le tableau de détail
         heures_mag = {}
         for mag in selected_mags:
-            sessions_mag = df_c_f[df_c_f['lieu_officiel'] == mag] if not df_c_f.empty else pd.DataFrame()
-            if not sessions_mag.empty:
-                h_sem = sessions_mag[sessions_mag['date_dt'].dt.weekday < 5]['duree_h'].sum()
-                h_we  = sessions_mag[sessions_mag['date_dt'].dt.weekday >= 5]['duree_h'].sum()
-            else:
-                h_sem = 0.0
-                h_we  = 0.0
-            heures_mag[mag] = (h_sem, h_we)
-        # --- Questionnaires supermarché par magasin ---
+            sessions_mag = df_c_f_sel[df_c_f_sel['lieu_officiel'] == mag] if not df_c_f_sel.empty else pd.DataFrame()
+            h_total = sessions_mag['duree_h'].sum() if not sessions_mag.empty else 0.0
+            heures_mag[mag] = h_total
+
+        # Questionnaires par magasin
         q_faits = {}
         for mag in selected_mags:
             if not df_supermarche_full.empty:
@@ -210,53 +197,36 @@ else:
                 q_faits[mag] = len(valides)
             else:
                 q_faits[mag] = 0
-        # Mise en cache
+
         _set_cached('progression', {
-            'metriques': (heures_sem, heures_we, q_sm_sem, q_sm_we, q_men_total),
-            'objectifs_heures': (objectif_heures_sem, objectif_heures_we),
-            'objectifs_q': (objectif_q_sm_sem, objectif_q_sm_we),
-            'objectif_men': objectif_men,
+            'heures_totales': heures_totales,
+            'q_sm_total': q_sm_total,
+            'objectif_heures': objectif_heures,
+            'objectif_q_sm': objectif_q_sm,
             'heures_mag': heures_mag,
             'q_faits': q_faits
         })
+
+# Affichage des métriques de progression (fusionnées)
+col1, col2 = st.columns(2)
+with col1:
+    ratio_heures = min(1.0, heures_totales / objectif_heures) if objectif_heures > 0 else 0
+    st.metric("Heures totales de comptage", f"{heures_totales:.1f} / {objectif_heures:.0f}")
+    st.progress(ratio_heures)
+with col2:
+    ratio_q_sm = min(1.0, q_sm_total / objectif_q_sm) if objectif_q_sm > 0 else 0
+    st.metric("Questionnaires supermarché valides", f"{q_sm_total} / {objectif_q_sm:.0f}")
+    st.progress(ratio_q_sm)
+
 # ================================================================
-# Affichage des métriques de progression
-# ================================================================
-st.subheader("Progression en semaine")
-col_s1, col_s2 = st.columns(2)
-with col_s1:
-    ratio_hsem = min(1.0, heures_sem / objectif_heures_sem) if objectif_heures_sem > 0 else 0
-    st.metric("Heures comptage semaine", f"{heures_sem:.1f} / {objectif_heures_sem:.0f}")
-    st.progress(ratio_hsem)
-with col_s2:
-    ratio_sm_sem = min(1.0, q_sm_sem / objectif_q_sm_sem) if objectif_q_sm_sem > 0 else 0
-    st.metric("Questionnaires supermarché semaine", f"{q_sm_sem} / {objectif_q_sm_sem:.0f}")
-    st.progress(ratio_sm_sem)
-st.subheader("Progression le week‑end")
-col_w1, col_w2 = st.columns(2)
-with col_w1:
-    ratio_hwe = min(1.0, heures_we / objectif_heures_we) if objectif_heures_we > 0 else 0
-    st.metric("Heures comptage week‑end", f"{heures_we:.1f} / {objectif_heures_we:.0f}")
-    st.progress(ratio_hwe)
-with col_w2:
-    ratio_sm_we = min(1.0, q_sm_we / objectif_q_sm_we) if objectif_q_sm_we > 0 else 0
-    st.metric("Questionnaires supermarché week‑end", f"{q_sm_we} / {objectif_q_sm_we:.0f}")
-    st.progress(ratio_sm_we)
-st.subheader("Progression ménages")
-col_m1, col_m2, col_m3 = st.columns([1, 1, 1])
-with col_m1:
-    ratio_men = min(1.0, q_men_total / objectif_men) if objectif_men > 0 else 0
-    st.metric("Questionnaires ménages (purs)", f"{q_men_total} / {objectif_men}")
-    st.progress(ratio_men)
-# ================================================================
-# Tableau de détail par magasin
+# Tableau de détail par magasin (heures totales)
 # ================================================================
 if selected_mags:
     rows_avancement = []
     for mag in selected_mags:
-        h_sem, h_we = heures_mag.get(mag, (0.0, 0.0))
+        h_total = heures_mag.get(mag, 0.0)
         q = q_faits.get(mag, 0)
-        pct_heures = ((h_sem + h_we) / 8) * 100 if (h_sem + h_we) > 0 else 0
+        pct_heures = (h_total / 8) * 100 if h_total > 0 else 0
         pct_q = (q / 100) * 100 if q > 0 else 0
         mag_info = df_sm[df_sm['Nom'] == mag]
         if not mag_info.empty:
@@ -270,8 +240,7 @@ if selected_mags:
             'Secteur': secteur,
             'Taille': taille,
             'Niveau socio-économique': niveau,
-            'Heures semaine': f"{h_sem:.1f}",
-            'Heures week‑end': f"{h_we:.1f}",
+            'Heures totales': f"{h_total:.1f}",
             'Questionnaires': f"{q} / 100",
             'Progression comptage (%)': f"{pct_heures:.1f}%",
             'Progression questionnaire (%)': f"{pct_q:.1f}%"
@@ -281,13 +250,14 @@ if selected_mags:
     st.dataframe(df_avancement, width='stretch')
 else:
     st.info("ℹ️ Aucun magasin sélectionné.")
+
 # ================================================================
 # Tableau récapitulatif par strate
 # ================================================================
 if selected_mags:
     st.divider()
     st.subheader("📊 Récapitulatif par strate (taille × niveau socio-économique)")
-    # --- 1. Agrégats sur TOUS les supermarchés (fichier complet) ---
+
     df_sm_complet = df_sm.copy()
     price_cols = [c for c in df_sm.columns if ' - ' in c and any(u in c.lower() for u in ['l', 'litre'])]
     if price_cols:
@@ -299,7 +269,7 @@ if selected_mags:
         nb_vend_huile=('vend_huile', 'sum'),
         magasins_complet=('Nom', list)
     ).reset_index()
-    # --- 2. Agrégats sur les magasins SÉLECTIONNÉS pour les enquêtes ---
+
     df_sm_sel = df_sm[df_sm['Nom'].isin(selected_mags)].copy()
     if price_cols:
         df_sm_sel['vend_huile'] = (df_sm_sel[price_cols] > 0).any(axis=1)
@@ -308,27 +278,26 @@ if selected_mags:
     df_strates_sel = df_sm_sel.groupby(['Taille', 'Niveau_socio']).agg(
         magasins_sel=('Nom', list)
     ).reset_index()
-    # --- 3. Fusion et calcul des indicateurs ---
+
     df_strates = df_strates_complet.merge(df_strates_sel, on=['Taille', 'Niveau_socio'], how='left')
     df_strates['magasins_sel'] = df_strates['magasins_sel'].apply(lambda x: x if isinstance(x, list) else [])
-    # Fonction pour calculer heures et questionnaires sur une liste de magasins (sélectionnés)
+
     def get_heures_et_questionnaires(magasins):
-        heures_sem = 0.0
-        heures_we = 0.0
+        heures_tot = 0.0
         nb_q = 0
         for mag in magasins:
             if not df_c_f.empty:
                 sessions = df_c_f[df_c_f['lieu_officiel'] == mag]
                 if not sessions.empty:
-                    heures_sem += sessions[sessions['date_dt'].dt.weekday < 5]['duree_h'].sum()
-                    heures_we  += sessions[sessions['date_dt'].dt.weekday >= 5]['duree_h'].sum()
+                    heures_tot += sessions['duree_h'].sum()
             if not df_supermarche_full.empty:
                 q_mag = df_supermarche_full[df_supermarche_full['magasin_officiel'] == mag]
                 if 'statut' in q_mag.columns:
                     nb_q += len(q_mag[q_mag['statut'] != 'Refus'])
                 else:
                     nb_q += len(q_mag)
-        return heures_sem + heures_we, nb_q
+        return heures_tot, nb_q
+
     rows_strates = []
     for _, row in df_strates.iterrows():
         taille = row['Taille']
@@ -336,10 +305,7 @@ if selected_mags:
         nb_total = row['nb_total']
         nb_vend_huile = row['nb_vend_huile']
         pct_vend = (nb_vend_huile / nb_total * 100) if nb_total > 0 else 0
-        # Magasins sélectionnés (pour enquête)
         mags_sel = row['magasins_sel']
-        nb_selected = len(mags_sel)
-        # Magasins enquêtés parmi les sélectionnés (ceux avec questionnaire ou comptage)
         mags_couverts = []
         for m in mags_sel:
             has_q = False
@@ -356,9 +322,7 @@ if selected_mags:
                 mags_couverts.append(m)
         nb_couverts = len(mags_couverts)
         pct_couvert = (nb_couverts / nb_vend_huile * 100) if nb_vend_huile > 0 else 0
-        # Heures et questionnaires pour les magasins sélectionnés
         total_heures, nb_q = get_heures_et_questionnaires(mags_sel)
-        # Formatter
         vend_huile_str = f"{nb_vend_huile} ({pct_vend:.1f}%)"
         enquete_str = f"{nb_couverts} ({pct_couvert:.1f}%)" if nb_couverts > 0 else f"0 (0.0%)"
         rows_strates.append({
@@ -376,6 +340,7 @@ if selected_mags:
         st.info("Aucune donnée de strate disponible.")
 else:
     st.info("Sélectionnez des magasins pour voir le récapitulatif par strate.")
+
 st.divider()
 st.header("🛒 Sélection des magasins (avec huile)")
 if df_sm.empty:
@@ -408,6 +373,3 @@ if set(new_selection) != set(selected_mags):
     st.session_state.selected_magasins = new_selection
     save_planning_state([], st.session_state.selected_magasins)
     st.rerun()
-# ------------------------------------------------------------
-# ONGLET 1 : ENQUÊTEUR
-# ------------------------------------------------------------

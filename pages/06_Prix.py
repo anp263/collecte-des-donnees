@@ -254,9 +254,8 @@ if not df_supermarche_full.empty and not df_sm.empty:
                           title="Taux d'achat par niveau socio-économique")
         fig_taux.update_traces(texttemplate='%{text:.1f}%', textposition='outside')
         fig_taux.update_layout(template="gilroy_export")
-        fig_taux = force_black_axes(fig_taux)
+        fig_taux = force_black_axes(fig_taux, caption=f"Basé sur {df_taux['Nombre de questionnaires'].sum()} questionnaires valides hors refus.")
         st.plotly_chart(fig_taux, width='stretch')
-        st.caption(f"Basé sur {df_taux['Nombre de questionnaires'].sum()} questionnaires valides hors refus.")
     else:
         st.info("Données insuffisantes pour le calcul du taux par niveau.")
 else:
@@ -352,13 +351,12 @@ if not prix_ext.empty and top8_brands_prix:
             title=titre_graph + " (top 8 marques les plus achetées)"
         )
         fig_marque.update_layout(xaxis_tickangle=-45, template="gilroy_export")
-        fig_marque = force_black_axes(fig_marque)
+        fig_marque = force_black_axes(fig_marque, caption=f"Basé sur {len(df_prix_marque_top8)} relevés de prix pour les marques du top 8.")
         if devise == "FC":
             fig_marque.update_yaxes(tickformat=",.0f")
         else:
             fig_marque.update_yaxes(tickformat=",.2f")
         st.plotly_chart(fig_marque, width='stretch')
-        st.caption(f"Basé sur {len(df_prix_marque_top8)} relevés de prix pour les marques du top 8.")
     else:
         st.info("Aucune donnée pour ce contenant.")
 else:

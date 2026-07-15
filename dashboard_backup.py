@@ -60,34 +60,115 @@ pio.templates["gilroy_export"] = go.layout.Template(
     )
 )
 pio.templates.default = "gilroy_export"
-def force_black_axes(fig, title_size=18, tick_size=15):
+def force_black_axes(fig, title_size=18, tick_size=15, caption=None, export_width=None, export_height=None):
     """
-    Applique une police noire et des tailles explicites à tous les axes,
-    aux légendes, annotations et titres d'une figure Plotly.
+    Stylise une figure Plotly :
+    - Police noire de taille fixe (indépendante de la taille d'export)
+    - Le graphique s'adapte à la taille d'export (marges, espacement)
+    - Retours à la ligne automatiques dans les titres, annotations, légendes et caption
+    - Caption toujours en bas à gauche, sans chevaucher les titres d'axes
     """
-    # Titre général
-    if fig.layout.title:
+    # Dimensions d'export (depuis session_state si non fournies)
+    if export_width is None:
+        export_width = st.session_state.get("export_width", 1000)
+    if export_height is None:
+        export_height = st.session_state.get("export_height", 600)
+
+    # Fonction de wrapping interne
+    def wrap_text(text, max_chars_per_line):
+        if not isinstance(text, str) or len(text) <= max_chars_per_line:
+            return text
+        words = text.split(' ')
+        lines = []
+        current_line = ''
+        for word in words:
+            if len(current_line) + len(word) + 1 > max_chars_per_line and current_line:
+                lines.append(current_line)
+                current_line = word
+            else:
+                current_line = (current_line + ' ' + word) if current_line else word
+        if current_line:
+            lines.append(current_line)
+        return '<br>'.join(lines)
+
+    # --- 1. Wrapping des légendes et labels de pie charts ---
+    # Estimation de la largeur disponible pour la légende
+    legend_orientation = fig.layout.legend.orientation if fig.layout.legend and fig.layout.legend.orientation else 'v'
+    if legend_orientation == 'h':
+        legend_width_px = export_width * 0.9   # légende horizontale, utilise presque toute la largeur
+    else:
+        legend_width_px = export_width * 0.3   # légende verticale à droite, environ 30% de la largeur
+    max_chars_legend = max(15, int(legend_width_px / 6.5))   # 6.5 px par caractère (taille ~13)
+
+    for trace in fig.data:
+        # Nom de la trace (affiché dans la légende)
+        if hasattr(trace, 'name') and trace.name:
+            trace.name = wrap_text(trace.name, max_chars_legend)
+        # Cas particulier des pie charts : labels des secteurs (si présents)
+        if hasattr(trace, 'labels') and trace.labels:
+            trace.labels = [wrap_text(label, max_chars_legend) for label in trace.labels]
+
+    # --- 2. Style des polices (taille fixe) ---
+    if fig.layout.title and fig.layout.title.text:
         fig.layout.title.font.color = "black"
         fig.layout.title.font.size = 22
         fig.layout.title.font.family = "Gilroy, sans-serif"
-    # Légende
+        # Wrapping du titre (plus large)
+        fig.layout.title.text = wrap_text(fig.layout.title.text, int(export_width * 0.8 / 6.5))
+
     if fig.layout.legend:
         fig.layout.legend.font.color = "black"
         fig.layout.legend.font.size = 13
-    # Axes principaux et secondaires
+
     for axis_name in fig.layout:
         if axis_name.startswith('xaxis') or axis_name.startswith('yaxis'):
             axis = fig.layout[axis_name]
-            if axis.title and axis.title.font:
+            if axis.title and axis.title.text:
                 axis.title.font.color = "black"
                 axis.title.font.size = title_size
+                axis.title.text = wrap_text(axis.title.text, int(export_width * 0.4 / 6.5))
             if axis.tickfont:
                 axis.tickfont.color = "black"
                 axis.tickfont.size = tick_size
-    # Annotations
+
+    # Annotations existantes (ex: labels ajoutés manuellement)
     if fig.layout.annotations:
         for ann in fig.layout.annotations:
             ann.font.color = "black"
+            if ann.text:
+                ann.text = wrap_text(ann.text, int(export_width * 0.4 / 6.5))
+
+    # --- 3. Caption en bas à gauche, sans chevauchement des axes ---
+    if caption:
+        # Le texte peut être long -> wrapping adapté à la largeur totale
+        wrapped_caption = wrap_text(caption, int(export_width * 0.9 / 6.5))
+        nb_lines = wrapped_caption.count('<br>') + 1
+        # Marge inférieure : espace pour la caption + un peu de padding
+        margin_b = max(60, 40 + nb_lines * 18)
+        fig.add_annotation(
+            text=wrapped_caption,
+            xref="paper", yref="paper",
+            x=0.02, y=-0.2,            # toujours en bas à gauche, en dessous du graphique
+            xanchor="left",
+            yanchor="top",
+            showarrow=False,
+            font=dict(size=11, color="black", family="Gilroy, sans-serif")
+        )
+        fig.update_layout(margin=dict(b=margin_b))
+
+    # --- 4. Activation de l'auto-ajustement des marges des axes ---
+    for axis_name in fig.layout:
+        if axis_name.startswith('xaxis') or axis_name.startswith('yaxis'):
+            if hasattr(fig.layout[axis_name], 'automargin'):
+                fig.layout[axis_name].automargin = True
+
+    # --- 5. Appliquer les dimensions d'export (sans toucher aux polices) ---
+    fig.update_layout(
+        autosize=True,
+        width=export_width,
+        height=export_height
+    )
+
     return fig
 # ------------------------------------------------------------
 # Surcharge de st.plotly_chart pour ajouter le téléchargement

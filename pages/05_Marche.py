@@ -15,7 +15,7 @@ from collections import defaultdict
 df_q_f = st.session_state.get('df_q_f', pd.DataFrame())
 df_c_f = st.session_state.get('df_c_f', pd.DataFrame())
 df_p_f = st.session_state.get('df_p_f', pd.DataFrame())
-df_sm = st.session_state.get('df_sm', pd.DataFrame())
+df_sm = st.session_state.get('df_sm_huile', st.session_state.get('df_sm', pd.DataFrame()))
 df_supermarche_full = st.session_state.get('df_supermarche_full', pd.DataFrame())
 df_q_f_raw = st.session_state.get('df_q_f_raw', pd.DataFrame())
 df_profils_pivot = st.session_state.get('df_profils_pivot', pd.DataFrame())
@@ -24,6 +24,14 @@ df_prices_ext = st.session_state.get('df_prices_ext', pd.DataFrame())
 df_menage = st.session_state.get('df_menage', pd.DataFrame())
 df_supermarche = st.session_state.get('df_supermarche', pd.DataFrame())
 selected_mags = st.session_state.get('selected_mags', [])
+if not df_sm.empty and selected_mags:
+    original_count = len(selected_mags)
+    selected_mags = [m for m in selected_mags if m in df_sm['Nom'].values]
+    if len(selected_mags) < original_count:
+        st.warning(
+            f"⚠️ {original_count - len(selected_mags)} magasin(s) sélectionné(s) ne venden(t) pas d'huile de palme rouge "
+            f"et ont été exclus de l'estimation du marché."
+        )
 date_range = st.session_state.get('date_range', (None, None))
 magasin_mapping = {}
 

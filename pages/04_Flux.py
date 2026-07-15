@@ -127,36 +127,7 @@ def estimate_daily_flow_onglet(magasin, jour_code, k, profil):
         ouvert = get_opening_hours(sm_row.iloc[0], 'semaine' if not is_we else 'weekend')
     clients = [int(round(k * profil[h])) if ouvert[h] else 0 for h in range(24)]
     return clients, sum(clients)
-# --------------------------------------------------------
-# Correspondance magasin – profil Google (inchangée)
-# --------------------------------------------------------
-st.subheader("🔗 Correspondance magasin – profil Google (mapping)")
-st.markdown("Pour chaque magasin sélectionné, choisissez un profil Google direct ou un profil médian de secteur. "
-            "La valeur par défaut est le profil médian du secteur du magasin (s'il n'y a pas de mapping Google existant).")
-with st.expander("✏️ Éditer la correspondance"):
-    magasins_dispos_google = sorted(df_profils_pivot['magasin'].unique()) if not df_profils_pivot.empty else []
-    secteurs_dispos = sorted(secteur_profiles['secteur'].unique()) if secteur_profiles is not None else []
-    secteur_options = [f"Profil médian secteur {s}" for s in secteurs_dispos]
-    options = secteur_options + magasins_dispos_google
-    mapping_corrige = magasin_mapping.copy()
-    for mag in selected_mags:
-        current_val = mapping_corrige.get(mag, "")
-        secteur_mag = df_sm[df_sm['Nom'] == mag]['Secteur'].values[0] if not df_sm[df_sm['Nom'] == mag].empty else None
-        default_secteur_str = f"Profil médian secteur {secteur_mag}" if secteur_mag and f"Profil médian secteur {secteur_mag}" in options else ""
-        if not current_val or current_val not in options:
-            current_val = default_secteur_str if default_secteur_str else options[0]
-        idx = options.index(current_val) if current_val in options else 0
-        new_val = st.selectbox(f"**{mag}**", options, index=idx, key=f"mapping_{mag}")
-        if new_val.startswith("Profil médian secteur "):
-            mapping_corrige[mag] = ""
-        else:
-            mapping_corrige[mag] = new_val
-    if st.button("💾 Enregistrer les modifications", key="save_mapping_flux"):
-        clean_mapping = {k: v for k, v in mapping_corrige.items() if v}
-        with open(mapping_file, 'w', encoding='utf-8') as f:
-            json.dump(clean_mapping, f, indent=2, ensure_ascii=False)
-        st.success("Correspondance sauvegardée. Les calculs vont être mis à jour.")
-        st.rerun()
+
 # --------------------------------------------------------
 # Calcul des k pour tous les magasins sélectionnés (avec sérialisation)
 # --------------------------------------------------------
@@ -222,6 +193,7 @@ if mag_choisi:
     data = all_k_data[mag_choisi]
     k = data['k']
     details = data['details']
+    nb_comptages = len(details)  # <-- défini avant utilisation dans le caption
     jours_sem = ['Mo', 'Tu', 'We', 'Th', 'Fr']
     jours_we  = ['Sa', 'Su']
     profils_sem, profils_we = [], []
@@ -319,11 +291,14 @@ if mag_choisi:
                      ticktext=[f"{h}h" for h in heures[::2]], row=2, col=1)
     fig.update_yaxes(title_text="% couverture", row=2, col=1, secondary_y=False)
     fig.update_yaxes(title_text="Facteur k", row=2, col=1, secondary_y=True)
-    fig.update_layout(height=800, title_text=f"Analyse intégrée – {mag_choisi}", template="gilroy_export")
-    fig = force_black_axes(fig)
-    st.plotly_chart(fig, width='stretch', key="analyse_integree")
-    nb_comptages = len(details)
-    st.caption(f"Basé sur {nb_comptages} session(s) de comptage pour ce magasin. Les boxplots montrent la distribution des facteurs k par heure.")
+    fig.update_layout(height=800, title_text=f"Analyse intégrée – {mag_choisi}")
+    # ──────── NOUVEAU ────────
+    plotly_chart_with_local_export(
+        fig,
+        caption=f"Basé sur {nb_comptages} session(s) de comptage pour ce magasin. Les boxplots montrent la distribution des facteurs k par heure.",
+        key="analyse_integree"
+    )
+    # ─────────────────────────
 # --------------------------------------------------------
 # Périodes d’affluence par secteur (Google) – inchangé
 # --------------------------------------------------------
@@ -349,10 +324,13 @@ else:
                                      labels=dict(x="Heure", y="Secteur", color="Occupation (%)"),
                                      title="Affluence moyenne en semaine (lun-ven)")
             fig_heat_sem.update_xaxes(tickvals=list(range(0,24,2)))
-            fig_heat_sem.update_layout(template="gilroy_export")
-            fig_heat_sem = force_black_axes(fig_heat_sem)
-            st.plotly_chart(fig_heat_sem, width='stretch', key="heat_sem")
-            st.caption(f"Basé sur les profils Google de {len(df_sem_heat)} secteurs. Les valeurs sont en % d'occupation maximale.")
+            # ──────── NOUVEAU ────────
+            plotly_chart_with_local_export(
+                fig_heat_sem,
+                caption=f"Basé sur les profils Google de {len(df_sem_heat)} secteurs. Les valeurs sont en % d'occupation maximale.",
+                key="heat_sem"
+            )
+            # ─────────────────────────
         with col2:
             st.markdown("**Week‑end (sam‑dim)**")
             we_data = []
@@ -365,10 +343,13 @@ else:
                                     labels=dict(x="Heure", y="Secteur", color="Occupation (%)"),
                                     title="Affluence moyenne en week-end (sam-dim)")
             fig_heat_we.update_xaxes(tickvals=list(range(0,24,2)))
-            fig_heat_we.update_layout(template="gilroy_export")
-            fig_heat_we = force_black_axes(fig_heat_we)
-            st.plotly_chart(fig_heat_we, width='stretch', key="heat_we")
-            st.caption(f"Basé sur les profils Google de {len(df_we_heat)} secteurs. Les valeurs sont en % d'occupation maximale.")
+            # ──────── NOUVEAU ────────
+            plotly_chart_with_local_export(
+                fig_heat_we,
+                caption=f"Basé sur les profils Google de {len(df_we_heat)} secteurs. Les valeurs sont en % d'occupation maximale.",
+                key="heat_we"
+            )
+            # ─────────────────────────
         secteur_sel = st.selectbox("Détail pour un secteur", secteurs_a_afficher, key="sect_detail")
         row_sec = secteur_profiles[secteur_profiles['secteur'] == secteur_sel].iloc[0]
         median_sem_occ = [np.mean([row_sec.get(f"{j}_{h}", 0.0) for j in jours_sem]) for h in range(24)]
@@ -384,10 +365,14 @@ else:
             fig_pointe.add_shape(type="rect", x0=h-0.4, x1=h+0.4, y0=0, y1=val, fillcolor="orange", opacity=0.2, line_width=0)
         fig_pointe.update_xaxes(title_text="Heure", tickvals=heures[::2], ticktext=[f"{h}h" for h in heures[::2]])
         fig_pointe.update_yaxes(title_text="Occupation (%)")
-        fig_pointe.update_layout(title=f"Profil d’affluence – secteur {secteur_sel} (avec top 3 heures)", template="gilroy_export")
-        fig_pointe = force_black_axes(fig_pointe)
-        st.plotly_chart(fig_pointe, width='stretch', key="pointe_secteur")
-        st.caption(f"Basé sur les données Google Popular Times pour le secteur {secteur_sel}. Les zones colorées mettent en évidence les 3 heures de pointe.")
+        fig_pointe.update_layout(title=f"Profil d’affluence – secteur {secteur_sel} (avec top 3 heures)")
+        # ──────── NOUVEAU ────────
+        plotly_chart_with_local_export(
+            fig_pointe,
+            caption=f"Basé sur les données Google Popular Times pour le secteur {secteur_sel}. Les zones colorées mettent en évidence les 3 heures de pointe.",
+            key="pointe_secteur"
+        )
+        # ─────────────────────────
         top_data = []
         for secteur in secteurs_a_afficher:
             row = secteur_profiles[secteur_profiles['secteur'] == secteur].iloc[0]
@@ -407,7 +392,6 @@ else:
         df_top = pd.DataFrame(top_data)
         st.subheader("Top 3 heures les plus chargées")
         st.dataframe(df_top, width='stretch')
-        st.caption(f"Basé sur les données Google Popular Times pour les {len(secteurs_a_afficher)} secteurs affichés.")
 # --------------------------------------------------------
 # Couverture des plages horaires (inchangé)
 # --------------------------------------------------------
@@ -466,11 +450,14 @@ if mag_gantt:
         fig_cov.update_layout(title=f"Plages horaires couvertes – {mag_gantt}",
                               xaxis=dict(title="Heure de la journée", tickvals=list(range(0,24,2)),
                                          ticktext=[f"{h}h" for h in range(0,24,2)], range=[0,24]),
-                              yaxis=dict(visible=False), height=300, showlegend=True,
-                              template="gilroy_export")
-        fig_cov = force_black_axes(fig_cov)
-        st.plotly_chart(fig_cov, width='stretch', key="cov_hours")
-        st.caption(f"Basé sur {len(sessions)} sessions de comptage. Les rectangles colorés montrent les plages horaires couvertes, les zones grisées les horaires d'ouverture du magasin.")
+                              yaxis=dict(visible=False), height=300, showlegend=True)
+        # ──────── NOUVEAU ────────
+        plotly_chart_with_local_export(
+            fig_cov,
+            caption=f"Basé sur {len(sessions)} sessions de comptage. Les rectangles colorés montrent les plages horaires couvertes, les zones grisées les horaires d'ouverture du magasin.",
+            key="cov_hours"
+        )
+        # ─────────────────────────
         def compute_cov_hours(intervals):
             merged = merge_intervals_minutes(intervals)
             total_min = sum(e - s for s, e in merged)
@@ -511,10 +498,13 @@ if mag_c:
                                            name='y=x', line=dict(dash='dash', color='black')))
             fig_coher.update_xaxes(title_text="Flux prédit (clients/h)", tickformat=",.0f")
             fig_coher.update_yaxes(title_text="Flux réel (clients/h)", tickformat=",.0f")
-            fig_coher.update_layout(template="gilroy_export")
-            fig_coher = force_black_axes(fig_coher)
-            st.plotly_chart(fig_coher, width='stretch', key="coherence")
-            st.caption(f"Basé sur {len(points)} sessions de comptage. La droite y=x représente une prédiction parfaite.")
+            # ──────── NOUVEAU ────────
+            plotly_chart_with_local_export(
+                fig_coher,
+                caption=f"Basé sur {len(points)} sessions de comptage. La droite y=x représente une prédiction parfaite.",
+                key="coherence"
+            )
+            # ─────────────────────────
         else:
             st.info("Impossible de calculer les flux prédits (k manquant).")
 # --------------------------------------------------------
@@ -713,29 +703,38 @@ else:
                                  title="Clients estimés par jour de semaine", points="all")
             fig_box_sem.update_xaxes(tickangle=45)
             fig_box_sem.update_yaxes(tickformat=",.0f")
-            fig_box_sem.update_layout(template="gilroy_export")
-            fig_box_sem = force_black_axes(fig_box_sem)
-            st.plotly_chart(fig_box_sem, width='stretch', key="box_sem")
-            st.caption(f"Basé sur {len(df_estim)} magasins. Les points représentent chaque magasin.")
+            # ──────── NOUVEAU ────────
+            plotly_chart_with_local_export(
+                fig_box_sem,
+                caption=f"Basé sur {len(df_estim)} magasins. Les points représentent chaque magasin.",
+                key="box_sem"
+            )
+            # ─────────────────────────
         with col2:
             fig_box_we = px.box(df_estim, x='Segment', y='we_med',
                                 labels={'Segment': 'Segment', 'we_med': 'Clients estimés par jour de week-end'},
                                 title="Clients estimés par jour de week-end", points="all")
             fig_box_we.update_xaxes(tickangle=45)
             fig_box_we.update_yaxes(tickformat=",.0f")
-            fig_box_we.update_layout(template="gilroy_export")
-            fig_box_we = force_black_axes(fig_box_we)
-            st.plotly_chart(fig_box_we, width='stretch', key="box_we")
-            st.caption(f"Basé sur {len(df_estim)} magasins. Les points représentent chaque magasin.")
+            # ──────── NOUVEAU ────────
+            plotly_chart_with_local_export(
+                fig_box_we,
+                caption=f"Basé sur {len(df_estim)} magasins. Les points représentent chaque magasin.",
+                key="box_we"
+            )
+            # ─────────────────────────
         fig_box_total = px.box(df_estim, x='Segment', y='total_med',
                                labels={'Segment': 'Segment', 'total_med': 'Total hebdomadaire estimé'},
                                title="Total hebdomadaire estimé par magasin", points="all")
         fig_box_total.update_xaxes(tickangle=45)
         fig_box_total.update_yaxes(tickformat=",.0f")
-        fig_box_total.update_layout(template="gilroy_export")
-        fig_box_total = force_black_axes(fig_box_total)
-        st.plotly_chart(fig_box_total, width='stretch', key="box_total")
-        st.caption(f"Basé sur {len(df_estim)} magasins. Les points représentent chaque magasin.")
+        # ──────── NOUVEAU ────────
+        plotly_chart_with_local_export(
+            fig_box_total,
+            caption=f"Basé sur {len(df_estim)} magasins. Les points représentent chaque magasin.",
+            key="box_total"
+        )
+        # ─────────────────────────
     # Stockage sécurisé pour l'export
     if 'df_estim' in locals():
         st.session_state['freq_magasin'] = df_estim[['Magasin', 'Jour semaine', 'Jour WE', 'Total hebdo']].copy()
@@ -773,12 +772,55 @@ fig_freq_bars.update_layout(
     title='Fréquentation hebdomadaire estimée par magasin (semaine + week‑end)',
     legend=dict(x=0.01, y=0.99),
     xaxis_tickangle=-45,
-    height=500,
-    template="gilroy_export"
+    height=500
 )
-fig_freq_bars = force_black_axes(fig_freq_bars)
-st.plotly_chart(fig_freq_bars, width='stretch')
-st.caption(f"Basé sur {len(df_estim_sorted)} magasins avec facteur k calculable.")
-# ------------------------------------------------------------
-# ONGLET 5 : ESTIMATION DU MARCHÉ (corrigé)
-# ------------------------------------------------------------
+# ──────── NOUVEAU ────────
+plotly_chart_with_local_export(
+    fig_freq_bars,
+    caption=f"Basé sur {len(df_estim_sorted)} magasins avec facteur k calculable.",
+    key="freq_bars"
+)
+
+# ─── NOUVEAU BOXPLOT GLOBAL DE FRÉQUENTATION ───
+st.subheader("📊 Distribution de la fréquentation hebdomadaire estimée (tous magasins)")
+if not df_estim.empty and 'total_med' in df_estim.columns:
+    # Création du boxplot
+    fig_box = px.box(
+        df_estim,
+        y='total_med',
+        points='all',
+        title='Fréquentation hebdomadaire estimée – distribution globale',
+        labels={'total_med': 'Clients estimés par semaine'},
+        color_discrete_sequence=['steelblue']
+    )
+
+    fig_box.update_traces(showlegend=True)
+    
+
+    fig_box.update_layout(
+        xaxis=dict(title=''),
+        yaxis=dict(title='Clients estimés par semaine', tickformat=',.0f'),
+        showlegend=True
+    )
+    # Affichage avec export
+    plotly_chart_with_local_export(
+        fig_box,
+        caption=f"Basé sur {len(df_estim)} magasins avec facteur k calculable. La boîte représente la distribution des fréquentations hebdomadaires estimées.",
+        key="box_global_freq"
+    )
+
+    # Statistiques descriptives
+    stats = df_estim['total_med'].describe(percentiles=[0.25, 0.5, 0.75]).round(0)
+    stats_dict = {
+        'Moyenne': stats['mean'],
+        'Écart-type': stats['std'],
+        'Minimum': stats['min'],
+        'Q1': stats['25%'],
+        'Médiane': stats['50%'],
+        'Q3': stats['75%'],
+        'Maximum': stats['max']
+    }
+    df_stats = pd.DataFrame(list(stats_dict.items()), columns=['Statistique', 'Valeur'])
+    st.table(df_stats)
+else:
+    st.info("Aucune donnée de fréquentation disponible pour le boxplot.")

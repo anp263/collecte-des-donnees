@@ -1,3 +1,4 @@
+# utils.py – Version corrigée (position des notes export)
 """
 utils.py – Fonctions utilitaires pour le dashboard
 """
@@ -11,6 +12,10 @@ from math import radians, cos, sin, asin, sqrt
 import os
 from datetime import datetime
 import streamlit as st
+import plotly.graph_objects as go
+import copy
+import io
+from PIL import Image
 
 # Décorateur inactif (évite les boucles de re-rendu)
 def timed(func):
@@ -56,20 +61,16 @@ DEFAULT_ANOMALY_SETTINGS = {
 # ──────────────────────────────────────────────
 
 def make_hashable(df):
-    """Convertit toutes les colonnes contenant des listes/dicts/ndarray en chaînes JSON.
-    Vérifie TOUTES les valeurs (pas seulement un échantillon).
-    """
+    """Convertit toutes les colonnes contenant des listes/dicts/ndarray en chaînes JSON."""
     df = df.copy()
     for col in df.columns:
         if df[col].dtype == object:
-            # Vérification rapide : essai de hasher la première valeur non-nulle
             first_valid = df[col].dropna().iloc[0] if not df[col].dropna().empty else None
             if first_valid is not None and isinstance(first_valid, (list, dict, np.ndarray)):
                 df[col] = df[col].apply(
                     lambda x: json.dumps(x, ensure_ascii=False) if isinstance(x, (list, dict, np.ndarray)) else x
                 )
             else:
-                # Vérification exhaustive pour détecter des valeurs non-hashables
                 non_hashable_types = {list, dict, np.ndarray}
                 detected_types = set()
                 for val in df[col].dropna():
@@ -349,23 +350,22 @@ def get_sm_hash():
 # Fonctions ajoutées pour les pages
 # ============================================================
 
-def force_black_axes(fig, title_size=18, tick_size=15, caption=None):
+def force_black_axes(fig, title_size=18, tick_size=15, caption=None, export_width=None, export_height=None):
     """
     Applique une police noire et des tailles explicites à tous les axes,
     aux légendes, annotations et titres d'une figure Plotly.
-    
-    Paramètres
-    ----------
-    fig : go.Figure
-        La figure à styliser.
-    title_size : int
-        Taille de la police des titres d'axes.
-    tick_size : int
-        Taille de la police des graduations.
-    caption : str, optional
-        Texte de légende à ajouter en bas de la figure (intégré dans la figure,
-        donc exportable en PNG).
+    Peut aussi ajouter un caption intégré dans la figure (exportable).
+    Cette fonction est conservée pour compatibilité mais n'est plus utilisée.
     """
+    # Récupérer les dimensions depuis la session si non fournies
+    if export_width is None:
+        export_width = st.session_state.get("export_width", 1000)
+    if export_height is None:
+        export_height = st.session_state.get("export_height", 600)
+    # Facteurs d'échelle
+    scale_h = max(0.5, min(2.0, export_height / 600))
+    scale_w = max(0.5, min(2.0, export_width / 1000))
+    scale = min(scale_h, scale_w)
     # Titre général
     if fig.layout.title:
         fig.layout.title.font.color = "black"
@@ -391,14 +391,41 @@ def force_black_axes(fig, title_size=18, tick_size=15, caption=None):
             ann.font.color = "black"
     # Ajout du caption intégré dans la figure (exportable)
     if caption:
+        # Largeur disponible pour le texte du caption
+        avail_width_px = export_width * 0.9
+        chars_per_line = max(20, int(avail_width_px / 6.5))
+        # Retours à la ligne automatiques
+        if len(caption) > chars_per_line:
+            wrapped_text = ""
+            for word in caption.split(' '):
+                line_so_far = wrapped_text.split('<br>')[-1] if '<br>' in wrapped_text else wrapped_text
+                if len(line_so_far) + len(word) + 1 > chars_per_line:
+                    wrapped_text += '<br>' + word
+                else:
+                    prefix = ' ' if wrapped_text and not wrapped_text.endswith('<br>') else ''
+                    wrapped_text += prefix + word
+            caption = wrapped_text
+        # Marge basée adaptative
+        nb_lines = caption.count('<br>') + 1
+        margin_b = max(40, min(120, int(80 * scale + 15 * nb_lines)))
+        pos_y = max(-0.30, min(-0.10, -0.17 * scale))
         fig.add_annotation(
             text=caption,
             xref="paper", yref="paper",
-            x=-0.07, y=-0.17,
+
+            x=0.02, y=pos_y,
+            xanchor="left",
             showarrow=False,
             font=dict(size=11, color="black", family="Gilroy, sans-serif")
         )
-        fig.update_layout(margin=dict(b=80))
+
+        fig.update_layout(margin=dict(b=margin_b))
+    # Activer automargin sur tous les axes
+    for axis_name in fig.layout:
+        if axis_name.startswith('xaxis') or axis_name.startswith('yaxis'):
+            axis = fig.layout[axis_name]
+            if hasattr(axis, 'automargin'):
+                axis.automargin = True
     return fig
 
 
@@ -430,15 +457,7 @@ def parse_criteres_smart(val):
 def plot_with_caption(fig, caption_text=None, **kwargs):
     """
     Affiche un graphique Plotly avec une caption intégrée dans la figure (exportable en PNG).
-    
-    Paramètres
-    ----------
-    fig : go.Figure
-        La figure Plotly à afficher.
-    caption_text : str, optional
-        Texte de caption à ajouter en bas de la figure.
-    **kwargs :
-        Arguments passés à st.plotly_chart (ex: width='stretch').
+    Cette fonction est conservée pour compatibilité mais n'est plus utilisée.
     """
     if caption_text:
         import copy
@@ -446,7 +465,7 @@ def plot_with_caption(fig, caption_text=None, **kwargs):
         fig.add_annotation(
             text=caption_text,
             xref="paper", yref="paper",
-            x=0.5, y=-0.12,
+            x=0.5, y=-0.17,
             showarrow=False,
             font=dict(size=11, color="gray", family="Gilroy, sans-serif")
         )
@@ -574,9 +593,6 @@ def build_unified_questionnaire_df(df_q_f):
         }
         rows.append(unified)
     return pd.DataFrame(rows)
-# Création du DataFrame unifié (utilisé uniquement pour l'export)
-
-
 
 
 # ============================================================
@@ -633,71 +649,6 @@ def is_peak(dt, secteur, config):
                     return True
             return False
     return False
-
-    def clean_mag_name(name):
-        if isinstance(name, str) and ' → ' in name:
-            return name.split(' → ')[0].strip()
-        return name
-    selected_norm = {normalize_name(m): m for m in selected_mags}
-    if not df_q.empty and 'magasin_officiel' in df_q.columns:
-        corrections_file = "store_mapping_corrections.json"
-        manual_corrections = {}
-        if os.path.exists(corrections_file):
-            with open(corrections_file, 'r', encoding='utf-8') as f:
-                manual_corrections = json.load(f)
-        magasin_mapping = {}
-        all_officiel = df_q['magasin_officiel'].dropna().unique()
-        for officiel in all_officiel:
-            cleaned_officiel = clean_mag_name(officiel)
-            if cleaned_officiel in selected_mags:
-                magasin_mapping[officiel] = cleaned_officiel
-            elif officiel in manual_corrections:
-                corrected = manual_corrections[officiel]
-                if corrected is not None and corrected in selected_mags:
-                    magasin_mapping[officiel] = corrected
-            else:
-                norm_off = normalize_name(cleaned_officiel)
-                if norm_off in selected_norm:
-                    magasin_mapping[officiel] = selected_norm[norm_off]
-                else:
-                    magasin_mapping[officiel] = None
-        mask_sm = df_q['type'].isin(['supermarche', 'supermarche_menage'])
-        keep_sm = df_q['magasin_officiel'].isin(set(magasin_mapping.keys()))
-        df_q = df_q[~mask_sm | keep_sm]
-    # Filtrage des comptages (inchangé, mais on peut appliquer le même nettoyage si besoin)
-    if not df_c.empty and 'lieu' in df_c.columns:
-        df_c['lieu_norm'] = df_c['lieu'].apply(normalize_name)
-        if not df_sm.empty:
-            sm_norm = dict(zip(df_sm['nom_norm'], df_sm['Nom']))
-            df_c['lieu_officiel'] = df_c['lieu_norm'].map(sm_norm).fillna(df_c['lieu'])
-        else:
-            df_c['lieu_officiel'] = df_c['lieu']
-        df_c = df_c[df_c['lieu_officiel'].isin(selected_mags)]
-    if not df_p.empty and 'supermarche' in df_p.columns:
-        prix_mapping = {}
-        all_sm = df_p['supermarche'].dropna().unique()
-        for sm in all_sm:
-            if sm in selected_mags:
-                prix_mapping[sm] = sm
-            else:
-                norm_sm = normalize_name(sm)
-                best_score = 0
-                best_match = None
-                for norm_sel, sel_orig in selected_norm.items():
-                    score = SequenceMatcher(None, norm_sm, norm_sel).ratio()
-                    if score > best_score and score >= 0.8:
-                        best_score = score
-                        best_match = sel_orig
-                if best_match:
-                    prix_mapping[sm] = best_match
-        df_p = df_p[df_p['supermarche'].isin(set(prix_mapping.keys()))]
-
-
-
-# ============================================================
-
-
-# ============================================================
 
 
 # ============================================================
@@ -1099,40 +1050,445 @@ def is_peak(dt, secteur, config):
                     return True
             return False
     return False
-# ============================================================
-# Chargement des données de collecte
-# ============================================================
-@timed
-@st.cache_data(ttl=3600, show_spinner="Chargement des données…")
 
-def load_commune_niveau():
-    if os.path.exists(COMMUNE_NIVEAU_FILE):
-        with open(COMMUNE_NIVEAU_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    default = {
-        "gombe": "Aisé",
-        "ngaliema": "Aisé",
-        "limete": "Aisé",
-        "lingwala": "Moyen",
-        "kalamu": "Moyen",
-        "barumbu": "Moyen",
-        "kinshasa": "Moyen",
-        "bandalungwa": "Moyen",
-        "ngiri-ngiri": "Moyen",
-        "kasa-vubu": "Moyen",
-        "lemba": "Moyen",
-        "matete": "Populaire",
-        "ndjili": "Populaire",
-        "masina": "Populaire",
-        "kimbanseke": "Populaire",
-        "mont-ngafula": "Populaire",
-        "selembao": "Populaire",
-        "maluku": "Populaire",
-        "nsele": "Populaire"
+
+def prepare_figure_for_export(fig, config=None, caption=None, export_width=None, export_height=None, dpi=96):
+    """
+    Prépare une figure Plotly pour un export propre.
+    config : dict avec les clés suivantes (valeurs par défaut si absentes) :
+        ...
+        - title_text          (str)  : ''     → si non vide, remplace le titre principal
+        - xaxis_title_text    (str)  : ''     → si non vide, remplace le titre de l'axe X
+        - yaxis_title_text    (str)  : ''     → si non vide, remplace le titre de l'axe Y
+        ...
+    """
+    if config is None:
+        config = {}
+
+    def get(key, default):
+        return config.get(key, default)
+
+    MAIN_TITLE_PT = get('main_title_pt', 11)
+    LEGEND_PT = get('legend_pt', 9)
+    LEGEND_TITLE_PT = get('legend_title_pt', 9)
+    AXIS_TITLE_PT = get('axis_title_pt', 10)
+    AXIS_TICK_PT = get('axis_tick_pt', 9)
+    BAR_TEXT_PT = get('bar_text_pt', 10)
+    PIE_PCT_PT = get('pie_pct_pt', 10)
+    CAPTION_PT = get('caption_pt', 7)
+    TITLE_Y = get('title_y', 0.98)
+    PIE_DOMAIN_Y = get('pie_domain_y', [0.2, 0.8])
+    PIE_DOMAIN_X = get('pie_domain_x', [0.1, 0.9])
+    X_TICK_ANGLE = get('x_tick_angle', -15)
+    CAPTION_X = get('caption_x', 0.02)
+    CAPTION_Y = get('caption_y', -0.22)
+    MARGIN_T = get('margin_t', 80)
+    MARGIN_B = get('margin_b', 80)
+    MARGIN_L = get('margin_l', 80)
+    MARGIN_R = get('margin_r', 80)
+    XAXIS_TITLE_STANDOFF = get('xaxis_title_standoff', 20)
+    YAXIS_TITLE_STANDOFF = get('yaxis_title_standoff', 25)
+    SHOW_LEGEND = get('show_legend', True)
+    LEGEND_X = get('legend_x', 1.0)
+    LEGEND_Y = get('legend_y', 0.5)
+    SHOW_BAR_TEXT = get('show_bar_text', True)
+    SHOW_CAPTION = get('show_caption', True)
+    # --- nouveaux paramètres pour les titres personnalisés ---
+    TITLE_TEXT = get('title_text', '')
+    XAXIS_TITLE_TEXT = get('xaxis_title_text', '')
+    YAXIS_TITLE_TEXT = get('yaxis_title_text', '')
+    # ---
+    WRAP_TITLE_FACTOR = get('wrap_title_max_chars_factor', 0.85)
+    WRAP_AXIS_FACTOR = get('wrap_axis_label_max_chars_factor', 0.4)
+    WRAP_LEGEND_FACTOR = get('wrap_legend_max_chars_factor', 0.30)
+    WRAP_CAPTION_FACTOR = get('wrap_caption_max_chars_factor', 0.9)
+
+    if export_width is None:
+        export_width = st.session_state.get("export_width", 1000)
+    if export_height is None:
+        export_height = st.session_state.get("export_height", 600)
+
+    # tailles en pixels
+    main_title_px = MAIN_TITLE_PT * dpi / 72
+    legend_px = LEGEND_PT * dpi / 72
+    legend_title_px = LEGEND_TITLE_PT * dpi / 72
+    title_px = AXIS_TITLE_PT * dpi / 72
+    tick_px = AXIS_TICK_PT * dpi / 72
+    bar_text_px = BAR_TEXT_PT * dpi / 72
+    pie_pct_px = PIE_PCT_PT * dpi / 72
+    caption_px = CAPTION_PT * dpi / 72
+
+    def wrap_text(text, max_chars):
+        if max_chars >= 200 or not isinstance(text, str):
+            return text
+        if len(text) <= max_chars:
+            return text
+        words = text.split(' ')
+        lines = []
+        current = ''
+        for w in words:
+            if len(current) + len(w) + 1 > max_chars and current:
+                lines.append(current)
+                current = w
+            else:
+                current = (current + ' ' + w) if current else w
+        if current:
+            lines.append(current)
+        return '<br>'.join(lines)
+
+    def max_chars_for_font(font_size_pt, width_factor, total_width_px):
+        char_width_px = 0.5 * font_size_pt * dpi / 72
+        if char_width_px <= 0:
+            return 20
+        return max(10, int(total_width_px * width_factor / char_width_px))
+
+    title_max = max_chars_for_font(MAIN_TITLE_PT, WRAP_TITLE_FACTOR, export_width)
+    axis_label_max = max_chars_for_font(AXIS_TICK_PT, WRAP_AXIS_FACTOR, export_width)
+    legend_max = max_chars_for_font(LEGEND_PT, WRAP_LEGEND_FACTOR, export_width)
+    is_pie = any(trace.type == 'pie' for trace in fig.data)
+
+    # --- Traces ---
+    for trace in fig.data:
+        if hasattr(trace, 'name') and trace.name:
+            trace.name = wrap_text(trace.name, legend_max)
+        if hasattr(trace, 'labels') and trace.labels is not None and len(trace.labels) > 0:
+            trace.labels = [wrap_text(l, legend_max if not is_pie else axis_label_max) for l in trace.labels]
+        if hasattr(trace, 'text') and trace.text is not None and len(trace.text) > 0:
+            trace.text = [wrap_text(t, axis_label_max) for t in trace.text]
+
+        if trace.type == 'pie':
+            trace.textinfo = 'percent+label'
+            trace.textfont.size = pie_pct_px
+            trace.showlegend = False
+        elif trace.type == 'bar':
+            if hasattr(trace, 'textfont'):
+                trace.textfont.size = bar_text_px
+            if not SHOW_BAR_TEXT:
+                if hasattr(trace, 'textposition') and trace.textposition != 'none':
+                    trace.textposition = 'none'
+                    trace.text = None
+
+    # --- Domaine camemberts ---
+    if is_pie:
+        for trace in fig.data:
+            if trace.type == 'pie':
+                trace.domain = dict(x=PIE_DOMAIN_X, y=PIE_DOMAIN_Y)
+
+    # --- Titre principal ---
+    if TITLE_TEXT and TITLE_TEXT.strip():
+        fig.layout.title.text = TITLE_TEXT.strip()    # remplacement
+    if fig.layout.title and fig.layout.title.text:
+        fig.layout.title.font.color = "black"
+        fig.layout.title.font.size = main_title_px
+        fig.layout.title.font.family = "Gilroy, sans-serif"
+        fig.layout.title.font.weight = "bold"
+        fig.layout.title.y = TITLE_Y
+        fig.layout.title.text = wrap_text(fig.layout.title.text, title_max)
+
+    # --- Légende ---
+    for trace in fig.data:
+        if trace.type != 'pie':
+            trace.showlegend = SHOW_LEGEND
+    fig.update_layout(
+        showlegend=SHOW_LEGEND,
+        legend=dict(
+            x=LEGEND_X,
+            y=LEGEND_Y,
+            xanchor='left',
+            yanchor='middle',
+            font=dict(size=legend_px, color="black", family="Gilroy, sans-serif"),
+            title=dict(font=dict(size=legend_title_px, color="black"))
+        )
+    )
+
+    # --- Axes ---
+    for ax in fig.layout:
+        if ax.startswith('xaxis') or ax.startswith('yaxis'):
+            axis = fig.layout[ax]
+            # Titre de l'axe personnalisé
+            if ax.startswith('xaxis') and XAXIS_TITLE_TEXT and XAXIS_TITLE_TEXT.strip():
+                if axis.title:
+                    axis.title.text = XAXIS_TITLE_TEXT.strip()
+                else:
+                    axis.title = dict(text=XAXIS_TITLE_TEXT.strip())
+            elif ax.startswith('yaxis') and YAXIS_TITLE_TEXT and YAXIS_TITLE_TEXT.strip():
+                if axis.title:
+                    axis.title.text = YAXIS_TITLE_TEXT.strip()
+                else:
+                    axis.title = dict(text=YAXIS_TITLE_TEXT.strip())
+
+            if axis.title and axis.title.text:
+                axis.title.font.color = "black"
+                axis.title.font.size = title_px
+                axis.title.text = wrap_text(axis.title.text, axis_label_max)
+                if ax.startswith('xaxis'):
+                    axis.title.standoff = XAXIS_TITLE_STANDOFF
+                else:
+                    axis.title.standoff = YAXIS_TITLE_STANDOFF
+            if axis.tickfont:
+                axis.tickfont.color = "black"
+                axis.tickfont.size = tick_px
+
+            if ax.startswith('xaxis'):
+                axis.tickangle = X_TICK_ANGLE
+                labels = []
+                if hasattr(axis, 'ticktext') and axis.ticktext is not None:
+                    labels = axis.ticktext
+                elif hasattr(axis, 'categoryarray') and axis.categoryarray is not None:
+                    labels = axis.categoryarray
+                if labels:
+                    max_len = max((len(str(l)) for l in labels), default=0)
+                    if max_len > 8:
+                        axis.tickfont.size = max(tick_px - 2, 6)
+
+    # --- Annotations existantes ---
+    if fig.layout.annotations:
+        for ann in fig.layout.annotations:
+            ann.font.color = "black"
+
+    # --- Note (caption) ---
+    if caption and SHOW_CAPTION:
+        cap_wrapped = wrap_text(caption, max_chars_for_font(CAPTION_PT, WRAP_CAPTION_FACTOR, export_width))
+        fig.add_annotation(
+            text=cap_wrapped,
+            xref="paper", yref="paper",
+            x=CAPTION_X, y=CAPTION_Y,
+            xanchor="left", yanchor="top",
+            showarrow=False,
+            font=dict(size=caption_px, color="black", family="Gilroy, sans-serif")
+        )
+
+    fig.update_layout(
+        margin=dict(t=MARGIN_T, b=MARGIN_B, l=MARGIN_L, r=MARGIN_R),
+        autosize=True,
+        width=export_width,
+        height=export_height,
+        paper_bgcolor='white',
+        plot_bgcolor='white'
+    )
+
+    for ax in fig.layout:
+        if ax.startswith('xaxis') or ax.startswith('yaxis'):
+            if hasattr(fig.layout[ax], 'automargin'):
+                fig.layout[ax].automargin = True
+
+    return fig
+
+
+def plotly_chart_with_local_export(fig, caption=None, key="plot"):
+    """
+    Affiche un graphique Plotly avec export PNG et réglages avancés.
+    """
+    default_config = {
+        'main_title_pt': 11,
+        'legend_pt': 9,
+        'legend_title_pt': 9,
+        'axis_title_pt': 10,
+        'axis_tick_pt': 9,
+        'bar_text_pt': 10,
+        'pie_pct_pt': 10,
+        'caption_pt': 7,
+        'title_y': 0.98,
+        'pie_domain_y': [0.2, 0.8],
+        'pie_domain_x': [0.1, 0.9],
+        'x_tick_angle': -15,
+        'caption_x': 0.02,
+        'caption_y': -0.22,
+        'margin_t': 80,
+        'margin_b': 80,
+        'margin_l': 80,
+        'margin_r': 80,
+        'xaxis_title_standoff': 20,
+        'yaxis_title_standoff': 25,
+        'show_legend': True,
+        'legend_x': 1.0,
+        'legend_y': 0.5,
+        'show_bar_text': True,
+        'show_caption': True,
+        'title_text': '',          # nouveau
+        'xaxis_title_text': '',    # nouveau
+        'yaxis_title_text': '',    # nouveau
+        'wrap_title_max_chars_factor': 0.85,
+        'wrap_axis_label_max_chars_factor': 0.4,
+        'wrap_legend_max_chars_factor': 0.30,
+        'wrap_caption_max_chars_factor': 0.9,
+        'export_width_cm': 16.0,
+        'export_height_cm': 9.0,
     }
-    return default
 
-def save_commune_niveau(mapping):
-    with open(COMMUNE_NIVEAU_FILE, 'w', encoding='utf-8') as f:
-        json.dump(mapping, f, indent=2, ensure_ascii=False)
+    config_key = f"{key}_config"
+    if config_key not in st.session_state:
+        st.session_state[config_key] = default_config.copy()
+        # Initialiser les titres avec ceux de la figure originale (une seule fois)
+        cfg = st.session_state[config_key]
+        if fig.layout.title and fig.layout.title.text:
+            cfg['title_text'] = fig.layout.title.text
+        # Pour les axes, il faut chercher le premier xaxis/yaxis
+        xaxis = None
+        yaxis = None
+        for ax in fig.layout:
+            if ax.startswith('xaxis') and xaxis is None:
+                xaxis = fig.layout[ax]
+            if ax.startswith('yaxis') and yaxis is None:
+                yaxis = fig.layout[ax]
+        if xaxis and xaxis.title and xaxis.title.text:
+            cfg['xaxis_title_text'] = xaxis.title.text
+        if yaxis and yaxis.title and yaxis.title.text:
+            cfg['yaxis_title_text'] = yaxis.title.text
 
+    config = st.session_state[config_key]
+
+    # --- Graphique principal ---
+    fig_display = copy.deepcopy(fig)
+    fig_display = prepare_figure_for_export(
+        fig_display,
+        config=config,
+        caption=caption if config.get('show_caption', True) else None,
+        export_width=1000,
+        export_height=600,
+        dpi=96
+    )
+    st.plotly_chart(fig_display, use_container_width=True, key=f"{key}_chart")
+
+    # --- Panneau de réglages ---
+    with st.expander("📥 Exporter ce graphique (PNG) + réglages avancés", expanded=False):
+        st.markdown("#### Dimensions d'export")
+        col1, col2 = st.columns(2)
+        with col1:
+            config['export_width_cm'] = st.number_input(
+                "Largeur (cm)", min_value=2.0, max_value=50.0,
+                value=config.get('export_width_cm', 16.0), step=0.5,
+                key=f"{key}_export_width_cm"
+            )
+        with col2:
+            config['export_height_cm'] = st.number_input(
+                "Hauteur (cm)", min_value=2.0, max_value=50.0,
+                value=config.get('export_height_cm', 9.0), step=0.5,
+                key=f"{key}_export_height_cm"
+            )
+
+        st.markdown("#### Polices")
+        col3, col4, col5 = st.columns(3)
+        with col3:
+            config['main_title_pt'] = st.slider("Titre principal (pt)", 6, 20, config['main_title_pt'], key=f"{key}_main_title_pt")
+            config['axis_title_pt'] = st.slider("Titres axes (pt)", 6, 18, config['axis_title_pt'], key=f"{key}_axis_title_pt")
+            config['legend_pt'] = st.slider("Légende (pt)", 6, 16, config['legend_pt'], key=f"{key}_legend_pt")
+        with col4:
+            config['axis_tick_pt'] = st.slider("Étiquettes axes (pt)", 6, 16, config['axis_tick_pt'], key=f"{key}_axis_tick_pt")
+            config['pie_pct_pt'] = st.slider("Étiquettes camembert (pt)", 6, 16, config['pie_pct_pt'], key=f"{key}_pie_pct_pt")
+            config['caption_pt'] = st.slider("Note (pt)", 5, 14, config['caption_pt'], key=f"{key}_caption_pt")
+        with col5:
+            config['legend_title_pt'] = st.slider("Titre légende (pt)", 6, 16, config['legend_title_pt'], key=f"{key}_legend_title_pt")
+            config['bar_text_pt'] = st.slider("Texte barres (pt)", 6, 16, config['bar_text_pt'], key=f"{key}_bar_text_pt")
+
+        st.markdown("#### Disposition")
+        col6, col7 = st.columns(2)
+        with col6:
+            config['title_y'] = st.slider("Position titre (y)", 0.0, 1.0, config['title_y'], step=0.01, key=f"{key}_title_y")
+            config['pie_domain_y'] = [
+                st.slider("Domaine pie min", 0.0, 0.5, config['pie_domain_y'][0], step=0.01, key=f"{key}_pie_domain_y_min"),
+                st.slider("Domaine pie max", 0.5, 1.0, config['pie_domain_y'][1], step=0.01, key=f"{key}_pie_domain_y_max")
+            ]
+            config['pie_domain_x'] = [
+                st.slider("Domaine pie xmin", 0.0, 0.5, config['pie_domain_x'][0], step=0.01, key=f"{key}_pie_domain_x_min"),
+                st.slider("Domaine pie xmax", 0.5, 1.0, config['pie_domain_x'][1], step=0.01, key=f"{key}_pie_domain_x_max")
+            ]
+        with col7:
+            st.markdown("**Marges manuelles (pixels)**")
+            config['margin_t'] = st.number_input("Marge haute", 20, 500, config.get('margin_t', 80), step=5, key=f"{key}_margin_top")
+            config['margin_b'] = st.number_input("Marge basse", 20, 500, config.get('margin_b', 80), step=5, key=f"{key}_margin_bottom")
+            config['margin_l'] = st.number_input("Marge gauche", 20, 500, config.get('margin_l', 80), step=5, key=f"{key}_margin_left")
+            config['margin_r'] = st.number_input("Marge droite", 20, 500, config.get('margin_r', 80), step=5, key=f"{key}_margin_right")
+
+        st.markdown("#### Titres des axes (décalage)")
+        col_ax1, col_ax2 = st.columns(2)
+        with col_ax1:
+            config['xaxis_title_standoff'] = st.number_input("Décalage titre X (px)", 0, 100, config.get('xaxis_title_standoff', 20), step=5, key=f"{key}_xaxis_title_standoff")
+        with col_ax2:
+            config['yaxis_title_standoff'] = st.number_input("Décalage titre Y (px)", 0, 100, config.get('yaxis_title_standoff', 25), step=5, key=f"{key}_yaxis_title_standoff")
+
+        st.markdown("#### Personnalisation des titres")
+        config['title_text'] = st.text_input("Titre principal", value=config.get('title_text', ''), key=f"{key}_title_text")
+        config['xaxis_title_text'] = st.text_input("Titre axe X", value=config.get('xaxis_title_text', ''), key=f"{key}_xaxis_title_text")
+        config['yaxis_title_text'] = st.text_input("Titre axe Y", value=config.get('yaxis_title_text', ''), key=f"{key}_yaxis_title_text")
+        if config['title_text'] or config['xaxis_title_text'] or config['yaxis_title_text']:
+            st.caption("Laissez un champ vide pour conserver le titre d'origine.")
+
+        st.markdown("#### Note (caption)")
+        config['show_caption'] = st.checkbox("Afficher la note", value=config['show_caption'], key=f"{key}_show_caption")
+        if config['show_caption']:
+            st.caption(f"*Note : {caption}*")
+            col_cap1, col_cap2 = st.columns(2)
+            with col_cap1:
+                config['caption_x'] = st.slider("Position horizontale (0–1)", 0.0, 1.0, config.get('caption_x', 0.02), step=0.01, key=f"{key}_caption_x")
+            with col_cap2:
+                config['caption_y'] = st.slider("Position verticale (sous le graphique)", -0.5, 0.0, config.get('caption_y', -0.22), step=0.01, key=f"{key}_caption_y")
+
+        st.markdown("#### Axe X – Angle des étiquettes")
+        config['x_tick_angle'] = st.slider(
+            "Angle des étiquettes (°)",
+            -90, 90, config.get('x_tick_angle', -15),
+            step=5, key=f"{key}_x_tick_angle"
+        )
+
+        st.markdown("#### Légende et étiquettes des barres")
+        col_leg1, col_leg2 = st.columns(2)
+        with col_leg1:
+            config['show_legend'] = st.checkbox("Afficher la légende", value=config.get('show_legend', True), key=f"{key}_show_legend")
+            if config['show_legend']:
+                config['legend_x'] = st.slider("Position légende X", 0.0, 1.0, config.get('legend_x', 1.0), step=0.01, key=f"{key}_legend_x")
+                config['legend_y'] = st.slider("Position légende Y", 0.0, 1.0, config.get('legend_y', 0.5), step=0.01, key=f"{key}_legend_y")
+        with col_leg2:
+            config['show_bar_text'] = st.checkbox("Afficher les étiquettes sur les barres", value=config.get('show_bar_text', True), key=f"{key}_show_bar_text")
+
+        st.markdown("#### Retour à la ligne (facteurs)")
+        col8, col9, col10 = st.columns(3)
+        with col8:
+            config['wrap_title_max_chars_factor'] = st.slider("Titre", 0.2, 1.0, config['wrap_title_max_chars_factor'], key=f"{key}_wrap_title")
+        with col9:
+            config['wrap_axis_label_max_chars_factor'] = st.slider("Étiquettes axes", 0.1, 0.8, config['wrap_axis_label_max_chars_factor'], key=f"{key}_wrap_axis")
+        with col10:
+            config['wrap_legend_max_chars_factor'] = st.slider("Légende", 0.1, 0.8, config['wrap_legend_max_chars_factor'], key=f"{key}_wrap_legend")
+
+        # Bouton de génération PNG
+        if st.button("📥 Générer le PNG avec ces réglages", key=f"{key}_generate"):
+            DPI = 300
+            export_width_px = int(round(config['export_width_cm'] / 2.54 * DPI))
+            export_height_px = int(round(config['export_height_cm'] / 2.54 * DPI))
+
+            fig_export = copy.deepcopy(fig)
+            fig_export = prepare_figure_for_export(
+                fig_export,
+                config=config,
+                caption=caption if config['show_caption'] else None,
+                export_width=export_width_px,
+                export_height=export_height_px,
+                dpi=DPI
+            )
+            img_bytes = fig_export.to_image(format="png", width=export_width_px, height=export_height_px, scale=1)
+
+            img = Image.open(io.BytesIO(img_bytes))
+            buf = io.BytesIO()
+            img.save(buf, format='PNG', dpi=(DPI, DPI))
+            buf.seek(0)
+
+            st.download_button(
+                label="📥 Télécharger le PNG",
+                data=buf,
+                file_name=f"graph_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png",
+                mime="image/png",
+                key=f"{key}_download"
+            )
+
+def normalize_reason(reason):
+    """
+    Normalise une raison de choix de marque en regroupant les variantes.
+    - 'emballage' et 'conditionnement' -> 'Emballage'
+    """
+    if not isinstance(reason, str):
+        return reason
+    r = reason.strip().lower()
+    # Fusionner emballage et conditionnement
+    if r in ['emballage', 'conditionnement', 'conditionnement/emballage']:
+        return 'Emballage'
+    return reason.strip()

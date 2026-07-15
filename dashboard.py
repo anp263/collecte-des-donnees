@@ -43,91 +43,18 @@ pio.templates["gilroy_export"] = go.layout.Template(
     )
 )
 pio.templates.default = "gilroy_export"
-def force_black_axes(fig, title_size=18, tick_size=15, caption=None):
-    """
-    Applique une police noire et des tailles explicites à tous les axes,
-    aux légendes, annotations et titres d'une figure Plotly.
-    Peut aussi ajouter un caption intégré dans la figure (exportable).
-    """
-    # Titre général
-    if fig.layout.title:
-        fig.layout.title.font.color = "black"
-        fig.layout.title.font.size = 22
-        fig.layout.title.font.family = "Gilroy, sans-serif"
-    # Légende
-    if fig.layout.legend:
-        fig.layout.legend.font.color = "black"
-        fig.layout.legend.font.size = 13
-    # Axes principaux et secondaires
-    for axis_name in fig.layout:
-        if axis_name.startswith('xaxis') or axis_name.startswith('yaxis'):
-            axis = fig.layout[axis_name]
-            if axis.title and axis.title.font:
-                axis.title.font.color = "black"
-                axis.title.font.size = title_size
-            if axis.tickfont:
-                axis.tickfont.color = "black"
-                axis.tickfont.size = tick_size
-    # Annotations
-    if fig.layout.annotations:
-        for ann in fig.layout.annotations:
-            ann.font.color = "black"
-    # Ajout du caption intégré dans la figure (exportable)
-    if caption:
-        fig.add_annotation(
-            text=caption,
-            xref="paper", yref="paper",
-            x=0.02, y=-0.12,
-            showarrow=False,
-            font=dict(size=11, color="black", family="Gilroy, sans-serif")
-        )
-        fig.update_layout(margin=dict(b=80))
-    return fig
+
 # ------------------------------------------------------------
-# Surcharge de st.plotly_chart pour ajouter le téléchargement
+# Surcharge de st.plotly_chart SUPPRIMÉE (on utilisera plotly_chart_with_local_export)
 # ------------------------------------------------------------
 # Récupérer les dimensions depuis la session (avec des valeurs par défaut)
 if "export_width" not in st.session_state:
     st.session_state.export_width = 1000
 if "export_height" not in st.session_state:
     st.session_state.export_height = 600
-# Sauvegarde de la fonction originale
-_original_plotly_chart = st.plotly_chart
-import hashlib as _hashlib
-# Compteur global unique pour garantir des clés uniques entre toutes les figures
-if 'dl_global_counter' not in st.session_state:
-    st.session_state.dl_global_counter = 0
-def plotly_chart_with_download(figure_or_data, *args, **kwargs):
-    """
-    Affiche un graphique Plotly et ajoute un bouton de téléchargement PNG.
-    Chaque bouton a une clé ABSOLUMENT unique (hash + compteur global),
-    ce qui évite les doublons entre re-rendus.
-    """
-    _original_plotly_chart(figure_or_data, *args, **kwargs)
-    import plotly.graph_objects as go
-    if not isinstance(figure_or_data, go.Figure):
-        return
-    fig = figure_or_data
-    width = st.session_state.get("export_width", 1000)
-    height = st.session_state.get("export_height", 600)
-    try:
-        img_bytes = fig.to_image(format="png", width=width, height=height, scale=2)
-        # Clé = hash + compteur global unique
-        fig_hash = _hashlib.md5(fig.to_json().encode()).hexdigest()[:12]
-        st.session_state.dl_global_counter += 1
-        ctr = st.session_state.dl_global_counter
-        key = f"dl_{ctr}_{fig_hash}"
-        st.download_button(
-            label="📥 Télécharger ce graphique (PNG)",
-            data=img_bytes,
-            file_name=f"plot_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{fig_hash}.png",
-            mime="image/png",
-            key=key
-        )
-    except Exception as e:
-        st.warning(f"Téléchargement non disponible : {e}")
-# Remplacer la fonction native par notre version
-st.plotly_chart = plotly_chart_with_download
+
+# La surcharge précédente de st.plotly_chart a été supprimée pour éviter les rechargements globaux.
+
 import json
 import re
 from datetime import datetime, time, timedelta, date
@@ -152,7 +79,8 @@ from utils import (
     normalize_name, normalize_brand, similar, parse_gps, haversine,
     extraire_litres, parse_time, load_brand_mapping, save_brand_mapping,
     get_official_brands, apply_brand_mapping_strict, apply_brand_mapping_soft,
-    load_commune_niveau, save_commune_niveau, get_settings_hash, get_sm_hash
+    load_commune_niveau, save_commune_niveau, get_settings_hash, get_sm_hash,
+    prepare_figure_for_export, plotly_chart_with_local_export  # ajout pour les pages
 )
 from data_loader import load_db, load_supermarches, load_frequentation_data
 from anomalies import (
@@ -232,7 +160,7 @@ DEFAULT_ANOMALY_SETTINGS = {
     "total_min_comptage": 10
 }
 # ============================================================
-# Fonctions utilitaires
+# Fonctions utilitaires (inchangées, conservées intégralement)
 # ============================================================
 def make_hashable(df):
     """Convertit TOUTES les colonnes object contenant listes/dicts en JSON. Version la plus simple possible."""
@@ -1210,6 +1138,17 @@ if not df_q.empty:
         df_q['magasin_officiel'] = df_q['lieu']
 else:
     df_q = pd.DataFrame(columns=['type', 'lieu', 'magasin_officiel', 'date', 'enqueteur'])
+# Identifier les colonnes de prix pour détecter la présence d'huile
+price_cols = [c for c in df_sm.columns if ' - ' in c and any(u in c.lower() for u in ['l', 'litre'])]
+if price_cols:
+    # On garde les magasins pour lesquels au moins un prix est > 0
+    df_sm_huile = df_sm[(df_sm[price_cols] > 0).any(axis=1)].copy()
+else:
+    # Fallback : si pas de colonnes de prix, on garde tout (mais normalement elles existent)
+    df_sm_huile = df_sm.copy()
+
+# Stocker dans la session pour les autres pages
+st.session_state['df_sm_huile'] = df_sm_huile
 # Sauvegarde du DataFrame AVANT filtrage par magasin
 df_q_avant_filtrage = df_q.copy()
 # ============================================================
@@ -1222,42 +1161,64 @@ if not df_c.empty:
         df_c['lieu_officiel'] = df_c['lieu_norm'].map(sm_norm).fillna(df_c['lieu'])
     else:
         df_c['lieu_officiel'] = df_c['lieu']
-# Filtrage magasins sélectionnés (corrigé)
+# --- Filtrage magasins sélectionnés (avec normalisation des clés de correction) ---
 selected_mags = st.session_state.get('selected_magasins', [])
 df_q_raw = df_q.copy() if not df_q.empty else df_q
+
 if selected_mags:
-    # Fonction de nettoyage : supprime " → commune"
     def clean_mag_name(name):
         if isinstance(name, str) and ' → ' in name:
             return name.split(' → ')[0].strip()
         return name
+
     selected_norm = {normalize_name(m): m for m in selected_mags}
-    if not df_q.empty and 'magasin_officiel' in df_q.columns:
-        corrections_file = "store_mapping_corrections.json"
-        manual_corrections = {}
-        if os.path.exists(corrections_file):
-            with open(corrections_file, 'r', encoding='utf-8') as f:
-                manual_corrections = json.load(f)
-        magasin_mapping = {}
-        all_officiel = df_q['magasin_officiel'].dropna().unique()
-        for officiel in all_officiel:
-            cleaned_officiel = clean_mag_name(officiel)
-            if cleaned_officiel in selected_mags:
-                magasin_mapping[officiel] = cleaned_officiel
-            elif officiel in manual_corrections:
-                corrected = manual_corrections[officiel]
-                if corrected is not None and corrected in selected_mags:
-                    magasin_mapping[officiel] = corrected
-            else:
-                norm_off = normalize_name(cleaned_officiel)
-                if norm_off in selected_norm:
-                    magasin_mapping[officiel] = selected_norm[norm_off]
-                else:
-                    magasin_mapping[officiel] = None
-        mask_sm = df_q['type'].isin(['supermarche', 'supermarche_menage'])
-        keep_sm = df_q['magasin_officiel'].isin(set(magasin_mapping.keys()))
-        df_q = df_q[~mask_sm | keep_sm]
-    # Filtrage des comptages (inchangé, mais on peut appliquer le même nettoyage si besoin)
+    corrections_file = "store_mapping_corrections.json"
+    manual_corrections = {}
+    if os.path.exists(corrections_file):
+        with open(corrections_file, 'r', encoding='utf-8') as f:
+            manual_corrections = json.load(f)
+
+    # --- Construire un dictionnaire de corrections avec clés normalisées ---
+    manual_corrections_norm = {normalize_name(k): v for k, v in manual_corrections.items()}
+
+    # 1. Construire le mapping (exact + manuel + normalisation)
+    all_officiel = df_q['magasin_officiel'].dropna().unique()
+    magasin_mapping = {}
+
+    for officiel in all_officiel:
+        cleaned_officiel = clean_mag_name(officiel)
+        # a) Correspondance exacte après nettoyage
+        if cleaned_officiel in selected_mags:
+            magasin_mapping[officiel] = cleaned_officiel
+            continue
+
+        # b) Correction manuelle (avec normalisation des clés)
+        norm_officiel = normalize_name(officiel)
+        if norm_officiel in manual_corrections_norm:
+            corrected = manual_corrections_norm[norm_officiel]
+            if corrected is not None and corrected in selected_mags:
+                magasin_mapping[officiel] = corrected
+                continue
+
+        # c) Correspondance par normalisation (sans accents, casse)
+        norm_off = normalize_name(cleaned_officiel)
+        if norm_off in selected_norm:
+            magasin_mapping[officiel] = selected_norm[norm_off]
+            continue
+
+        # d) Aucune correspondance
+        magasin_mapping[officiel] = None
+
+    # 2. Remplacer magasin_officiel par la valeur mappée (si non‑None)
+    df_q['magasin_officiel_orig'] = df_q['magasin_officiel']  # pour déboguer
+    df_q['magasin_officiel'] = df_q['magasin_officiel'].map(magasin_mapping).fillna(df_q['magasin_officiel'])
+
+    # 3. Filtrer : ne garder que les lignes dont le nouveau magasin_officiel est dans selected_mags
+    mask_sm = df_q['type'].isin(['supermarche', 'supermarche_menage'])
+    keep_sm = df_q['magasin_officiel'].isin(selected_mags)
+    df_q = df_q[~mask_sm | keep_sm]
+
+    # (Comptages et prix : même logique sans matching flou)
     if not df_c.empty and 'lieu' in df_c.columns:
         df_c['lieu_norm'] = df_c['lieu'].apply(normalize_name)
         if not df_sm.empty:
@@ -1266,6 +1227,7 @@ if selected_mags:
         else:
             df_c['lieu_officiel'] = df_c['lieu']
         df_c = df_c[df_c['lieu_officiel'].isin(selected_mags)]
+
     if not df_p.empty and 'supermarche' in df_p.columns:
         prix_mapping = {}
         all_sm = df_p['supermarche'].dropna().unique()
@@ -1274,15 +1236,10 @@ if selected_mags:
                 prix_mapping[sm] = sm
             else:
                 norm_sm = normalize_name(sm)
-                best_score = 0
-                best_match = None
-                for norm_sel, sel_orig in selected_norm.items():
-                    score = SequenceMatcher(None, norm_sm, norm_sel).ratio()
-                    if score > best_score and score >= 0.8:
-                        best_score = score
-                        best_match = sel_orig
-                if best_match:
-                    prix_mapping[sm] = best_match
+                if norm_sm in selected_norm:
+                    prix_mapping[sm] = selected_norm[norm_sm]
+                else:
+                    prix_mapping[sm] = None
         df_p = df_p[df_p['supermarche'].isin(set(prix_mapping.keys()))]
 # ============================================================
 # Construction du datetime complet (date + heure) pour df_q et df_q_raw
@@ -1376,25 +1333,8 @@ if not df_p.empty:
     df_p_f = df_p[mask_p].copy()
 else:
     df_p_f = pd.DataFrame()
-with st.sidebar:
-    st.markdown("---")
-    st.header("📐 Taille des graphiques exportés")
-    st.session_state.export_width = st.slider("Largeur (px)", 400, 2000, 1000, step=50)
-    st.session_state.export_height = st.slider("Hauteur (px)", 300, 1500, 600, step=50)
-with st.sidebar:
-    if st.button("Tester hachage"):
-        try:
-            _ = st.cache_data(lambda x: x)(pd.DataFrame({'a': [1,2], 'b': [{'c':3}]}))
-        except Exception as e:
-            st.error(f"Erreur de hachage : {e}")
-        else:
-            st.success("Hachage OK")
-with st.sidebar:
-    st.markdown("---")
-    st.header("⚡ Cache")
-with st.sidebar:
-    st.markdown("---")
-    pass
+# --- Suppression des sliders globaux de taille d'export ---
+# (Les réglages se font maintenant localement sous chaque graphique)
 # ============================================================
 # Construction du DataFrame unifié pour l'export des questionnaires
 # ============================================================
@@ -2101,7 +2041,7 @@ def compute_market_estimation(
             'n_s': n_s,
             'volumes': np.array(vols)
         }
-    n_boot = 500  # réduit pour performance, ajustez si nécessaire
+    n_boot = 2000  # réduit pour performance, ajustez si nécessaire
     total_hebdo_boot = []
     for _ in range(n_boot):
         total_hebdo = 0.0
@@ -2349,6 +2289,9 @@ pages = [
     st.Page('pages/11_Export.py', title='Export', icon='📤'),
 ]
 pg = st.navigation(pages)
+
+
+
 pg.run()
 
 # ============================================================
